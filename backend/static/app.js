@@ -176,8 +176,9 @@ function draw() {
   }
   ctx.stroke();
 
-  // Trig lines
+    // Trig lines
   const trigFns = ["sin", "cos", "tan", "cot", "sec", "csc"];
+  const JUMP_THRESHOLD = 2.0; // break line when value jumps more than this
   for (const fn of trigFns) {
     if (!enabled[fn]) continue;
     ctx.strokeStyle = COLORS[fn];
@@ -185,13 +186,19 @@ function draw() {
     ctx.globalAlpha = 0.85;
     ctx.beginPath();
     let pen = false;
+    let prevV = null;
     for (const p of pts) {
       const v = p[fn];
       if (v === null || v === undefined || !isFinite(v)) {
         pen = false;
+        prevV = null;
         continue;
       }
-      // Clamp to right-axis range for display purposes.
+      // Break the line if the value jumped by more than the threshold
+      // (this suppresses singularity spikes without falsifying the data).
+      if (prevV !== null && Math.abs(v - prevV) > JUMP_THRESHOLD) {
+        pen = false;
+      }
       const clamped = Math.max(trigMin, Math.min(trigMax, v));
       const x = xFor(p.t);
       const y = yForTrig(clamped);
@@ -201,6 +208,7 @@ function draw() {
       } else {
         ctx.lineTo(x, y);
       }
+      prevV = v;
     }
     ctx.stroke();
   }
