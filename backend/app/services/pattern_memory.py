@@ -1,8 +1,7 @@
 """Pattern memory: records each signature's outcome and updates recent_accuracy."""
 from ..db import get_pool
 
-# Window size for computing recent_accuracy.
-RECENT_WINDOW = 20
+RECENT_WINDOW = 50
 
 
 async def record_signature_outcome(
@@ -19,7 +18,6 @@ async def record_signature_outcome(
     pool = await get_pool()
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
-            # Upsert the pattern row.
             await cur.execute(
                 """
                 INSERT INTO patterns (pattern_signature, pattern_type,
@@ -37,7 +35,6 @@ async def record_signature_outcome(
                 return
             pattern_id = row[0]
 
-            # Update correct/incorrect only when a directional prediction was made.
             if prediction_direction in ("UP", "DOWN"):
                 if prediction_direction == actual_direction:
                     await cur.execute(
@@ -62,7 +59,6 @@ async def record_signature_outcome(
                         (pattern_id,),
                     )
 
-            # Record the actual market direction for this occurrence.
             if actual_direction == "UP":
                 await cur.execute(
                     """
@@ -83,7 +79,7 @@ async def record_signature_outcome(
                     (pattern_id, session_id, prediction_id, engine),
                 )
 
-            # Recompute recent_accuracy from the last RECENT_WINDOW outcomes.
+            # Recompute recent_accuracy over the last RECENT_WINDOW outcomes.
             await cur.execute(
                 """
                 SELECT
