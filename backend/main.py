@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.db import close_pool, get_pool
-from app.routes import collector, research
+from app.routes import collector, research, signals
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="BTC/USD Research Backend",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
@@ -32,6 +32,7 @@ app = FastAPI(
 
 app.include_router(collector.router, prefix="/api/collector", tags=["collector"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])
+app.include_router(signals.router, prefix="/api/signals", tags=["signals"])
 
 
 @app.get("/")
@@ -41,7 +42,6 @@ async def root():
 
 @app.get("/research")
 async def research_page():
-    """Serve the live research dashboard."""
     index = STATIC_DIR / "index.html"
     if not index.exists():
         return JSONResponse(
@@ -51,13 +51,21 @@ async def research_page():
     return FileResponse(index)
 
 
-# Mount static assets. Note: main.py lives in backend/, so STATIC_DIR is
-# backend/static/. We mount at /static.
+@app.get("/signals")
+async def signals_page():
+    page = STATIC_DIR / "signals.html"
+    if not page.exists():
+        return JSONResponse(
+            status_code=500,
+            content={"error": "static/signals.html not found"},
+        )
+    return FileResponse(page)
+
+
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-# Safety net: /api/* never falls through to HTML.
 @app.exception_handler(404)
 async def not_found(request: Request, exc):
     return JSONResponse(
