@@ -1,6 +1,7 @@
 """Prediction snapshot system."""
 import asyncio
 import inspect
+import json
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
@@ -41,16 +42,31 @@ async def _run_engines(ctx: EngineContext) -> List[EngineOutput]:
     return outputs
 
 
-def _pick_direction(
-    outputs: List[EngineOutput],
-) -> Tuple[str, Optional[float], Optional[str]]:
-    for o in outputs:
-        if o.direction != "NO_SIGNAL":
-            return o.direction, o.confidence, o.pattern_signature
+def _pick_direction(outputs: List[EngineOutput]):
+    """Return (direction, confidence, signature_json, primary_engine).
+
+    signature_json is a JSON object mapping engine name -> signature,
+    so every engine's signature is preserved for pattern memory.
+    """
+    signatures = {}
     for o in outputs:
         if o.pattern_signature:
-            return "NO_SIGNAL", None, o.pattern_signature
-    return "NO_SIGNAL", None, None
+            signatures[o.engine] = o.pattern_signature
+
+    direction = "NO_SIGNAL"
+    confidence = None
+    primary_engine = None
+    for o in outputs:
+        if o.direction != "NO_SIGNAL":
+            direction = o.direction
+            confidence = o.confidence
+            primary_engine = o.engine
+            break
+    if primary_engine is None and outputs:
+        primary_engine = outputs[0].engine
+
+    sig_json = json.dumps(signatures) if signatures else None
+    return direction, confidence, sig_json, primary_engine
 
 
 async def create_prediction_for_round(
@@ -92,15 +108,7 @@ async def create_prediction_for_round(
         recent_ticks=recent_ticks,
     )
     outputs = await _run_engines(ctx)
-    direction, confidence, pattern_sig = _pick_direction(outputs)
-
-    primary_engine = "none"
-    for o in outputs:
-        if o.direction != "NO_SIGNAL":
-            primary_engine = o.engine
-            break
-    if primary_engine == "none" and outputs:
-        primary_engine = outputs[0].engine
+    direction, confidence, sig_json, primary_engine = _pick_direction(outputs)
 
     pool = await get_pool()
     async with pool.connection() as conn:
@@ -131,7 +139,7 @@ async def create_prediction_for_round(
                     confidence,
                     lead_time_ms,
                     status,
-                    pattern_sig,
+                    sig_json,
                     primary_engine,
                 ),
             )
@@ -146,7 +154,6 @@ async def create_prediction_for_round(
         asyncio.create_task(
             _schedule_evaluation(prediction_id, target, direction)
         )
-
     return prediction_id
 
 
@@ -160,7 +167,6 @@ async def _schedule_evaluation(
     if delay > 0:
         await asyncio.sleep(delay)
     from .evaluator import evaluate_prediction
-
     try:
         await evaluate_prediction(prediction_id, predicted_direction)
     except Exception as e:
