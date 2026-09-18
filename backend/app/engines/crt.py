@@ -1,27 +1,11 @@
-"""CRT (Chinese Remainder Theorem) engine.
-
-Transforms recent BTC/USD price history into CRT residues over a set of
-pairwise-coprime moduli, reconstructs the integer, and derives a
-deterministic pattern signature.
-
-Direction is NEVER assumed from CRT parity. It is looked up in the
-patterns table (accuracy of past CRT states that preceded UP vs DOWN).
-Until sufficient evidence accumulates, the engine returns NO_SIGNAL.
-"""
+"""CRT (Chinese Remainder Theorem) engine."""
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..db import get_pool
 from .base import Engine, EngineContext, EngineOutput
 
-# Pairwise-coprime moduli (all primes, so coprime by construction).
 DEFAULT_MODULI: List[int] = [7, 11, 13, 17, 19, 23]
-
-# Scale factor to preserve price precision.
-# BTC/USD typically has 5 decimals; scale by 1e5 then take modulo to keep
-# the integer bounded.
 SCALE = 100_000
-
-# Lookup thresholds for direction determination.
 MIN_OCCURRENCES = 10
 MIN_ACCURACY = 0.55
 
@@ -38,27 +22,20 @@ def _crt_residues(value: int, moduli: List[int]) -> List[int]:
 
 
 def _crt_reconstruct(residues: List[int], moduli: List[int]) -> int:
-    """Classic CRT reconstruction.
-
-    Given residues r_i mod m_i, returns the unique x in [0, prod(moduli))
-    such that x ≡ r_i (mod m_i).
-    """
     M = _product(moduli)
     total = 0
     for r_i, m_i in zip(residues, moduli):
         M_i = M // m_i
-        inv = pow(M_i, -1, m_i)  # Python 3.8+: modular inverse
+        inv = pow(M_i, -1, m_i)
         total += r_i * M_i * inv
     return total % M
 
 
 def _normalized_state(reconstruction: int, modulus_product: int) -> float:
-    """Return a scalar in [0, 1) describing the CRT state."""
     return reconstruction / modulus_product
 
 
 def _pattern_signature(residues: List[int]) -> str:
-    """A deterministic, short, human-readable signature of the residue vector."""
     return "crt:" + "-".join(str(r) for r in residues)
 
 
@@ -69,81 +46,61 @@ class CRTEngine(Engine):
         self.moduli = moduli or DEFAULT_MODULI
         self.modulus_product = _product(self.moduli)
 
-    # ---- Input transformation --------------------------------------------
-
     def _quantize(self, price: float) -> int:
-        """Turn a price into a bounded integer.
-
-        Multiply by scale, floor to integer, then mod by the modulus product.
-        This gives a stable, deterministic integer that varies with price.
-        """
         scaled = int(price * SCALE)
         return scaled % self.modulus_product
-
-    # ---- Database lookup -------------------------------------------------
 
     async def _lookup_pattern(
         self, signature: str
     ) -> Optional[Tuple[str, int, float]]:
-        """Return (direction, occurrences, accuracy) if the pattern is
-        eligible for live use; else None.
-
-        The 'direction' returned is the historically dominant direction
-        for this signature, based on pattern_success_memory and
-        pattern_failure_memory.
-        """
         pool = await get_pool()
         async with pool.connection() as conn:
-            # Fetch overall stats for this signature
-            row = await conn.fetchrow(
-                """
-                SELECT p.id,
-                       p.occurrence_count,
-                       p.accuracy
-                FROM patterns p
-                WHERE p.pattern_signature = %s
-                """,
-                (signature,),
-            )
-            if not row:
-                return None
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT id, occurrence_count, accuracy
+                    FROM patterns
+                    WHERE pattern_signature = %s
+                    """,
+                    (signature,),
+                )
+                row = await cur.fetchone()
+                if not row:
+                    return None
 
-            occurrence_count = int(row["occurrence_count"] or 0)
-            accuracy = float(row["accuracy"]) if row["accuracy"] is not None else None
-            pattern_id = row["id"]
+                pattern_id = row[0]
+                occurrence_count = int(row[1] or 0)
+                accuracy = float(row[2]) if row[2] is not None else None
 
-            if occurrence_count < MIN_OCCURRENCES or accuracy is None:
-                return None
-            if accuracy < MIN_ACCURACY:
-                return None
+                if occurrence_count < MIN_OCCURRENCES or accuracy is None:
+                    return None
+                if accuracy < MIN_ACCURACY:
+                    return None
 
-            # Determine which direction has been correct more often for this
-            # pattern, by counting successes where the direction was UP vs DOWN.
-            up_row = await conn.fetchrow(
-                """
-                SELECT COUNT(*) AS c
-                FROM pattern_success_memory
-                WHERE pattern_id = %s AND result = 'UP'
-                """,
-                (pattern_id,),
-            )
-            down_row = await conn.fetchrow(
-                """
-                SELECT COUNT(*) AS c
-                FROM pattern_success_memory
-                WHERE pattern_id = %s AND result = 'DOWN'
-                """,
-                (pattern_id,),
-            )
-            up_correct = int(up_row["c"]) if up_row else 0
-            down_correct = int(down_row["c"]) if down_row else 0
+                await cur.execute(
+                    """
+                    SELECT COUNT(*) FROM pattern_success_memory
+                    WHERE pattern_id = %s AND result = 'UP'
+                    """,
+                    (pattern_id,),
+                )
+                up_row = await cur.fetchone()
+                up_correct = int(up_row[0]) if up_row else 0
 
-            if up_correct == down_correct:
-                return None
-            direction = "UP" if up_correct > down_correct else "DOWN"
-            return direction, occurrence_count, accuracy
+                await cur.execute(
+                    """
+                    SELECT COUNT(*) FROM pattern_success_memory
+                    WHERE pattern_id = %s AND result = 'DOWN'
+                    """,
+                    (pattern_id,),
+                )
+                down_row = await cur.fetchone()
+                down_correct = int(down_row[0]) if down_row else 0
 
-    # ---- Main entry point -------------------------------------------------
+                if up_correct == down_correct:
+                    return None
+                direction = "UP" if up_correct > down_correct else "DOWN"
+                return direction, occurrence_count, accuracy
 
     def run(self, ctx: EngineContext) -> EngineOutput:
         raise NotImplementedError("CRT engine is async; use run_async()")
@@ -158,7 +115,6 @@ class CRTEngine(Engine):
                 raw_state={"reason": "no recent ticks"},
             )
 
-        # Use the most recent price.
         _, price = ctx.recent_ticks[-1]
         integer_input = self._quantize(price)
         residues = _crt_residues(integer_input, self.moduli)
@@ -176,7 +132,6 @@ class CRTEngine(Engine):
             "normalized_state": normalized,
         }
 
-        # Look up historical evidence.
         try:
             lookup = await self._lookup_pattern(signature)
         except Exception as e:
