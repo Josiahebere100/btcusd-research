@@ -3,6 +3,7 @@
 Every route requires COLLECTOR_API_KEY. Every response is JSON.
 NEVER returns HTML for any /api/* path.
 """
+import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -16,15 +17,18 @@ from ..models import (
     SessionBatch,
     TickBatch,
 )
+from ..services.prediction import create_prediction_for_round
 from ..state import (
     compute_feed_status,
     get_state,
     note_beacon,
+    note_prediction_created,
     note_round,
     note_round_rejected,
     note_session,
     note_tick,
     note_tick_rejected,
+    recent_ticks_snapshot,
 )
 
 router = APIRouter()
@@ -54,12 +58,6 @@ def _iso_to_dt(value: Any):
     return None
 
 
-def _jsonb(value: Any) -> Any:
-    import json
-
-    return json.dumps(value) if value is not None else None
-
-
 # ---- GET /api/collector/health -------------------------------------------
 
 
@@ -87,6 +85,8 @@ async def health_get(
         "ticks_rejected": state.ticks_rejected,
         "rounds_rejected": state.rounds_rejected,
         "sessions_received": state.sessions_received,
+        "predictions_created": state.predictions_created,
+        "outcomes_evaluated": state.outcomes_evaluated,
         "last_beacon_at": (
             datetime.fromtimestamp(
                 state.last_beacon_at, tz=timezone.utc
@@ -191,6 +191,7 @@ async def ingest_rounds(
     pool = await get_pool()
     upserted = 0
     rejected = 0
+    state = get_state()
 
     async with pool.connection() as conn:
         for r in batch.rounds:
@@ -251,6 +252,32 @@ async def ingest_rounds(
                 )
                 note_round(r.model_dump())
                 upserted += 1
+
+                # --- Trigger prediction for a new round ---
+                if r.round_id not in state.seen_round_ids:
+                    state.seen_round_ids.add(r.round_id)
+                    # Cap set size to avoid unbounded growth.
+                    if len(state.seen_round_ids) > 10_000:
+                        state.seen_round_ids = set(
+                            list(state.seen_round_ids)[5000:]
+                        )
+
+                    if (
+                        round_start is not None
+                        and cutoff is not None
+                        and state.last_tick_price is not None
+                    ):
+                        asyncio.create_task(
+                            _maybe_create_prediction(
+                                session_id=r.session_id,
+                                round_id=r.round_id,
+                                round_start=round_start,
+                                trade_cutoff=cutoff,
+                                price_start=price_start,
+                                price_end=price_end,
+                                current_price=float(state.last_tick_price),
+                            )
+                        )
             except Exception as e:
                 print(f"[round] upsert failed: {e}")
                 note_round_rejected()
@@ -311,3 +338,32 @@ async def ingest_sessions(
         await conn.commit()
 
     return {"ok": True, "upserted": upserted}
+
+
+# ---- Prediction helper ---------------------------------------------------
+
+
+async def _maybe_create_prediction(
+    session_id,
+    round_id,
+    round_start,
+    trade_cutoff,
+    price_start,
+    price_end,
+    current_price,
+):
+    try:
+        pid = await create_prediction_for_round(
+            session_id=session_id,
+            round_id=round_id,
+            round_start=round_start,
+            trade_cutoff=trade_cutoff,
+            price_start=price_start,
+            price_end=price_end,
+            current_price=current_price,
+            recent_ticks=recent_ticks_snapshot(),
+        )
+        if pid is not None:
+            note_prediction_created()
+    except Exception as e:
+        print(f"[prediction] failed for round {round_id}: {e}")
