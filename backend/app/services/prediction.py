@@ -11,14 +11,10 @@ from ..config import (
 from ..db import get_pool
 from ..engines.base import Engine, EngineContext, EngineOutput
 from ..engines.crt import CRTEngine
-from ..engines.stub import StubEngine
 
-
-# ---- Engine registry -------------------------------------------------------
 
 _engines: List[Engine] = [
     CRTEngine(),
-    # StubEngine() intentionally disabled once CRT is registered.
 ]
 
 
@@ -26,16 +22,11 @@ def get_engines() -> List[Engine]:
     return _engines
 
 
-# ---- Engine execution -----------------------------------------------------
-
-
 async def _run_engines(ctx: EngineContext) -> List[EngineOutput]:
     outputs: List[EngineOutput] = []
     for engine in _engines:
         try:
-            if engine.is_async or inspect.iscoroutinefunction(
-                getattr(engine, "run_async", None)
-            ):
+            if inspect.iscoroutinefunction(getattr(engine, "run_async", None)):
                 out = await engine.run_async(ctx)
             else:
                 out = engine.run(ctx)
@@ -49,20 +40,13 @@ async def _run_engines(ctx: EngineContext) -> List[EngineOutput]:
 def _pick_direction(
     outputs: List[EngineOutput],
 ) -> Tuple[str, Optional[float], Optional[str]]:
-    """Choose a combined direction and return the (direction, confidence,
-    pattern_signature). Priority: first non-NO_SIGNAL engine output."""
     for o in outputs:
         if o.direction != "NO_SIGNAL":
             return o.direction, o.confidence, o.pattern_signature
-    # No signal from any engine; still record the first pattern signature
-    # if present for research purposes.
     for o in outputs:
         if o.pattern_signature:
             return "NO_SIGNAL", None, o.pattern_signature
     return "NO_SIGNAL", None, None
-
-
-# ---- Snapshot creation ----------------------------------------------------
 
 
 async def create_prediction_for_round(
@@ -106,7 +90,6 @@ async def create_prediction_for_round(
     outputs = await _run_engines(ctx)
     direction, confidence, pattern_sig = _pick_direction(outputs)
 
-    # Record the engine that produced the signal (or the first engine).
     primary_engine = "none"
     for o in outputs:
         if o.direction != "NO_SIGNAL":
@@ -117,38 +100,40 @@ async def create_prediction_for_round(
 
     pool = await get_pool()
     async with pool.connection() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO prediction_snapshots
-              (session_id, round_id, symbol, source, horizon_seconds,
-               prediction_timestamp, information_cutoff_timestamp,
-               target_timestamp, price_at_prediction, direction,
-               confidence, lead_time_ms, status, pattern_signature, engine)
-            VALUES
-              (%s, %s, 'BTC/USD', 'BC.GAME', %s,
-               %s, %s,
-               %s, %s, %s,
-               %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                session_id,
-                round_id,
-                horizon,
-                now,
-                now,
-                target,
-                current_price,
-                direction,
-                confidence,
-                lead_time_ms,
-                status,
-                pattern_sig,
-                primary_engine,
-            ),
-        )
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO prediction_snapshots
+                  (session_id, round_id, symbol, source, horizon_seconds,
+                   prediction_timestamp, information_cutoff_timestamp,
+                   target_timestamp, price_at_prediction, direction,
+                   confidence, lead_time_ms, status, pattern_signature, engine)
+                VALUES
+                  (%s, %s, 'BTC/USD', 'BC.GAME', %s,
+                   %s, %s,
+                   %s, %s, %s,
+                   %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    session_id,
+                    round_id,
+                    horizon,
+                    now,
+                    now,
+                    target,
+                    current_price,
+                    direction,
+                    confidence,
+                    lead_time_ms,
+                    status,
+                    pattern_sig,
+                    primary_engine,
+                ),
+            )
+            row = await cur.fetchone()
+            prediction_id = row[0] if row else None
         await conn.commit()
-        prediction_id = row["id"] if row else None
 
     if prediction_id is None:
         return None
