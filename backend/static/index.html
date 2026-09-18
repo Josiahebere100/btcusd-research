@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BTC/USD · BC.GAME · Trig Overlays</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="title-block">
+      <span class="title">BTC/USD</span>
+      <span class="dot">·</span>
+      <span class="source">BC.GAME</span>
+      <span class="dot">·</span>
+      <span class="subtitle">OBSERVED TICKS + TRIG OVERLAYS</span>
+    </div>
+    <div class="toggles">
+      <button data-fn="sin" class="toggle on">SIN</button>
+      <button data-fn="cos" class="toggle on">COS</button>
+      <button data-fn="tan" class="toggle on">TAN</button>
+      <button data-fn="cot" class="toggle on">COT</button>
+      <button data-fn="sec" class="toggle on">SEC</button>
+      <button data-fn="csc" class="toggle on">CSC</button>
+    </div>
+  </header>
+
+  <div class="statusbar">
+    <span id="status-text">initializing…</span>
+    <span id="status-extra"></span>
+  </div>
+
+  <main class="chart-wrap">
+    <canvas id="chart"></canvas>
+  </main>
+
+  <footer class="bottombar">
+    <button class="bottom-toggle" disabled title="Coming in a later phase">SHOW GEOMETRY EVENTS</button>
+    <button class="bottom-toggle" disabled title="Coming in a later phase">SHOW EVENT LABELS</button>
+    <button class="bottom-toggle" disabled title="Coming in a later phase">SHOW EULER TRAJECTORY</button>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
