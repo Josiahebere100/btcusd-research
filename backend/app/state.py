@@ -41,7 +41,7 @@ class FeedState:
 
     # Collector beacon
     last_beacon_at: Optional[float] = None
-    last_beacon: Optional[dict] = field(default_factory=None)
+    last_beacon: Optional[dict] = None
 
 
 _state = FeedState()
