@@ -6,7 +6,7 @@ NEVER returns HTML for any /api/* path.
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from ..auth import require_collector_key
 from ..db import get_pool
@@ -42,7 +42,6 @@ def _iso_to_dt(value: Any):
         v = value.strip()
         if not v:
             return None
-        # Python 3.11+ handles trailing Z. For 3.10 fallback, replace it.
         if v.endswith("Z"):
             v = v[:-1] + "+00:00"
         try:
@@ -56,7 +55,6 @@ def _iso_to_dt(value: Any):
 
 
 def _jsonb(value: Any) -> Any:
-    """asyncpg wants JSONB as a JSON-encoded string."""
     import json
 
     return json.dumps(value) if value is not None else None
@@ -69,7 +67,6 @@ def _jsonb(value: Any) -> Any:
 async def health_get(
     _auth: str = Depends(require_collector_key),
 ) -> Dict[str, Any]:
-    """Return the current state of the ingestion pipeline."""
     state = get_state()
     feed = compute_feed_status()
 
@@ -91,7 +88,9 @@ async def health_get(
         "rounds_rejected": state.rounds_rejected,
         "sessions_received": state.sessions_received,
         "last_beacon_at": (
-            datetime.fromtimestamp(state.last_beacon_at, tz=timezone.utc).isoformat()
+            datetime.fromtimestamp(
+                state.last_beacon_at, tz=timezone.utc
+            ).isoformat()
             if state.last_beacon_at
             else None
         ),
@@ -125,52 +124,55 @@ async def ingest_ticks(
     inserted = 0
     rejected = 0
 
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            for t in batch.ticks:
-                # Validate source/symbol strictly.
-                if t.source != "BC.GAME" or t.symbol != "BTC-USD":
-                    note_tick_rejected()
-                    rejected += 1
-                    continue
+    async with pool.connection() as conn:
+        for t in batch.ticks:
+            if t.source != "BC.GAME" or t.symbol != "BTC-USD":
+                note_tick_rejected()
+                rejected += 1
+                continue
 
-                tick_ts = _iso_to_dt(t.tick_timestamp)
-                recv_ts = _iso_to_dt(t.received_at)
-                if tick_ts is None or recv_ts is None:
-                    note_tick_rejected()
-                    rejected += 1
-                    continue
+            tick_ts = _iso_to_dt(t.tick_timestamp)
+            recv_ts = _iso_to_dt(t.received_at)
+            if tick_ts is None or recv_ts is None:
+                note_tick_rejected()
+                rejected += 1
+                continue
 
-                # Ensure session exists (auto-create placeholder if needed).
+            try:
                 await conn.execute(
                     """
                     INSERT INTO sessions (session_id, start_timestamp, status, reason)
-                    VALUES ($1, $2, 'ACTIVE', 'auto_created')
+                    VALUES (%s, %s, 'ACTIVE', 'auto_created')
                     ON CONFLICT (session_id) DO NOTHING
                     """,
-                    t.session_id,
-                    tick_ts,
+                    (t.session_id, tick_ts),
                 )
-
-                # Insert tick.
                 await conn.execute(
                     """
                     INSERT INTO market_ticks
                       (session_id, source, symbol, price, tick_timestamp,
                        received_at, latency_ms, feed_quality)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    t.session_id,
-                    t.source,
-                    t.symbol,
-                    t.price,
-                    tick_ts,
-                    recv_ts,
-                    t.latency_ms,
-                    None,
+                    (
+                        t.session_id,
+                        t.source,
+                        t.symbol,
+                        t.price,
+                        tick_ts,
+                        recv_ts,
+                        t.latency_ms,
+                        None,
+                    ),
                 )
                 note_tick(t.model_dump())
                 inserted += 1
+            except Exception as e:
+                print(f"[tick] insert failed: {e}")
+                note_tick_rejected()
+                rejected += 1
+
+        await conn.commit()
 
     return {"ok": True, "inserted": inserted, "rejected": rejected}
 
@@ -190,36 +192,32 @@ async def ingest_rounds(
     upserted = 0
     rejected = 0
 
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            for r in batch.rounds:
-                if r.source != "BC.GAME" or r.symbol != "BTC/USD":
-                    note_round_rejected()
-                    rejected += 1
-                    continue
+    async with pool.connection() as conn:
+        for r in batch.rounds:
+            if r.source != "BC.GAME" or r.symbol != "BTC/USD":
+                note_round_rejected()
+                rejected += 1
+                continue
 
-                round_start = _iso_to_dt(r.round_start_timestamp)
-                cutoff = _iso_to_dt(r.trade_cutoff_timestamp)
-                price_start = _iso_to_dt(r.price_start_timestamp)
-                price_end = _iso_to_dt(r.price_end_timestamp)
+            round_start = _iso_to_dt(r.round_start_timestamp)
+            cutoff = _iso_to_dt(r.trade_cutoff_timestamp)
+            price_start = _iso_to_dt(r.price_start_timestamp)
+            price_end = _iso_to_dt(r.price_end_timestamp)
 
-                if round_start is None:
-                    note_round_rejected()
-                    rejected += 1
-                    continue
+            if round_start is None:
+                note_round_rejected()
+                rejected += 1
+                continue
 
-                # Auto-create session if not yet present.
+            try:
                 await conn.execute(
                     """
                     INSERT INTO sessions (session_id, start_timestamp, status, reason)
-                    VALUES ($1, $2, 'ACTIVE', 'auto_created')
+                    VALUES (%s, %s, 'ACTIVE', 'auto_created')
                     ON CONFLICT (session_id) DO NOTHING
                     """,
-                    r.session_id,
-                    round_start,
+                    (r.session_id, round_start),
                 )
-
-                # Upsert on (session_id, round_id)
                 await conn.execute(
                     """
                     INSERT INTO rounds
@@ -227,7 +225,7 @@ async def ingest_rounds(
                        trade_cutoff_timestamp, price_start_timestamp,
                        price_end_timestamp, start_price, end_price, win_side,
                        raw_direction)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (session_id, round_id) DO UPDATE SET
                       trade_cutoff_timestamp = EXCLUDED.trade_cutoff_timestamp,
                       price_start_timestamp = EXCLUDED.price_start_timestamp,
@@ -237,20 +235,28 @@ async def ingest_rounds(
                       win_side = EXCLUDED.win_side,
                       raw_direction = EXCLUDED.raw_direction
                     """,
-                    r.session_id,
-                    r.round_id,
-                    r.symbol,
-                    round_start,
-                    cutoff,
-                    price_start,
-                    price_end,
-                    r.start_price,
-                    r.end_price,
-                    r.win_side,
-                    r.raw_direction,
+                    (
+                        r.session_id,
+                        r.round_id,
+                        r.symbol,
+                        round_start,
+                        cutoff,
+                        price_start,
+                        price_end,
+                        r.start_price,
+                        r.end_price,
+                        r.win_side,
+                        r.raw_direction,
+                    ),
                 )
                 note_round(r.model_dump())
                 upserted += 1
+            except Exception as e:
+                print(f"[round] upsert failed: {e}")
+                note_round_rejected()
+                rejected += 1
+
+        await conn.commit()
 
     return {"ok": True, "upserted": upserted, "rejected": rejected}
 
@@ -269,33 +275,39 @@ async def ingest_sessions(
     pool = await get_pool()
     upserted = 0
 
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            for s in batch.sessions:
-                start_ts = _iso_to_dt(s.start_timestamp)
-                end_ts = _iso_to_dt(s.end_timestamp)
-                if start_ts is None:
-                    continue
+    async with pool.connection() as conn:
+        for s in batch.sessions:
+            start_ts = _iso_to_dt(s.start_timestamp)
+            end_ts = _iso_to_dt(s.end_timestamp)
+            if start_ts is None:
+                continue
 
+            try:
                 await conn.execute(
                     """
                     INSERT INTO sessions
                       (session_id, start_timestamp, end_timestamp,
                        gap_before_ms, status, reason)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (session_id) DO UPDATE SET
                       end_timestamp = EXCLUDED.end_timestamp,
                       status = EXCLUDED.status,
                       reason = EXCLUDED.reason
                     """,
-                    s.session_id,
-                    start_ts,
-                    end_ts,
-                    s.gap_before_ms,
-                    s.status,
-                    s.reason,
+                    (
+                        s.session_id,
+                        start_ts,
+                        end_ts,
+                        s.gap_before_ms,
+                        s.status,
+                        s.reason,
+                    ),
                 )
                 note_session()
                 upserted += 1
+            except Exception as e:
+                print(f"[session] upsert failed: {e}")
+
+        await conn.commit()
 
     return {"ok": True, "upserted": upserted}
