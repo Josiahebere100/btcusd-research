@@ -11,10 +11,12 @@ from ..config import (
 from ..db import get_pool
 from ..engines.base import Engine, EngineContext, EngineOutput
 from ..engines.crt import CRTEngine
+from ..engines.labouchere import LabouchereEngine
 
 
 _engines: List[Engine] = [
     CRTEngine(),
+    LabouchereEngine(),
 ]
 
 
