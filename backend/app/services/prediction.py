@@ -12,7 +12,10 @@ from ..config import (
 from ..db import get_pool
 from ..engines.base import Engine, EngineContext, EngineOutput
 from ..engines.crt import CRTEngine
+from ..engines.entropy_regime import EntropyRegimeEngine
 from ..engines.labouchere import LabouchereEngine
+from ..engines.navier_stokes import NavierStokesAutomatonEngine
+from ..engines.superformula import SuperformulaEngine
 from ..engines.trig_euler import TrigEulerEngine
 from .combination import combination_key, lookup_combination
 
@@ -21,6 +24,9 @@ _engines: List[Engine] = [
     CRTEngine(),
     LabouchereEngine(),
     TrigEulerEngine(),
+    EntropyRegimeEngine(),
+    SuperformulaEngine(),
+    NavierStokesAutomatonEngine(),
 ]
 
 
@@ -44,23 +50,14 @@ async def _run_engines(ctx: EngineContext) -> List[EngineOutput]:
 
 
 async def _pick_direction(outputs: List[EngineOutput]):
-    """Return (direction, confidence, signatures_json, primary_source, combination_key).
-
-    Priority:
-      1. If all engines are NO_SIGNAL, return NO_SIGNAL.
-      2. Look up the combination key's historical bias. If strong, use it.
-      3. Else fall back to the first non-NO_SIGNAL engine.
-    """
     signatures = {}
     for o in outputs:
         if o.pattern_signature:
             signatures[o.engine] = o.pattern_signature
 
     comb_key = combination_key(outputs)
-
     all_neutral = all(o.direction == "NO_SIGNAL" for o in outputs)
 
-    # Try combination first (if at least one engine is non-neutral).
     if not all_neutral:
         try:
             lookup = await lookup_combination(comb_key)
@@ -69,21 +66,15 @@ async def _pick_direction(outputs: List[EngineOutput]):
             lookup = None
         if lookup is not None:
             direction, confidence, _occ = lookup
-            sig_json = json.dumps(
-                {**signatures, "_combination": comb_key}
-            )
+            sig_json = json.dumps({**signatures, "_combination": comb_key})
             return direction, confidence, sig_json, "combination", comb_key
 
-    # Fall back to first non-NO_SIGNAL engine.
     if not all_neutral:
         for o in outputs:
             if o.direction != "NO_SIGNAL":
-                sig_json = json.dumps(
-                    {**signatures, "_combination": comb_key}
-                )
+                sig_json = json.dumps({**signatures, "_combination": comb_key})
                 return o.direction, o.confidence, sig_json, o.engine, comb_key
 
-    # All neutral.
     sig_json = json.dumps({**signatures, "_combination": comb_key})
     primary = outputs[0].engine if outputs else "none"
     return "NO_SIGNAL", None, sig_json, primary, comb_key
