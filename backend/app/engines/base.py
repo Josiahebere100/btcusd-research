@@ -1,15 +1,4 @@
-"""Engine interface.
-
-Every prediction engine (CRT, Labouchere, Trig/Euler, Combination, and later
-the fruit-fly connectome) implements this interface. The orchestrator treats
-them interchangeably.
-
-An engine receives an EngineContext with the current round and recent price
-history, and returns an EngineOutput.
-
-Engines are allowed to return NO_SIGNAL. In fact, NO_SIGNAL should be the
-default output for any engine that isn't confident.
-"""
+"""Engine interface."""
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -25,14 +14,13 @@ class EngineContext:
     price_end_timestamp: Optional[datetime]
     current_time: datetime
     current_price: float
-    # Rolling history of (timestamp_seconds_float, price), oldest first
     recent_ticks: List[Tuple[float, float]] = field(default_factory=list)
 
 
 @dataclass
 class EngineOutput:
     engine: str
-    direction: str  # "UP" | "DOWN" | "NO_SIGNAL"
+    direction: str
     confidence: Optional[float] = None
     pattern_signature: Optional[str] = None
     raw_state: Optional[Dict[str, Any]] = None
@@ -48,6 +36,7 @@ class Engine:
     """Abstract engine."""
 
     name: str = "base"
+    is_async: bool = False
 
     def run(self, ctx: EngineContext) -> EngineOutput:
         raise NotImplementedError
