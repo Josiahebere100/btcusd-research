@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Signals · BTC/USD Research</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 0; background: #0a0a0c; color: #d7d7dd;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px; min-height: 100vh;
+    }
+    .topbar {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 20px; border-bottom: 1px solid #1a1a20; background: #0d0d10;
+    }
+    .title { color: #e8e8ee; font-weight: 600; letter-spacing: 0.5px; }
+    .dot { color: #4a4a55; margin: 0 8px; }
+    .sub { color: #6f6f7a; }
+    .banner {
+      padding: 16px 20px; font-size: 15px; letter-spacing: 0.5px;
+      border-bottom: 1px solid #14141a;
+    }
+    .banner.fired { background: #0f2a1a; color: #7fffb0; }
+    .banner.quiet { background: #121216; color: #6f6f7a; }
+    .wrap { padding: 20px; max-width: 1400px; margin: 0 auto; }
+    h2 {
+      font-size: 12px; color: #8a8a95; text-transform: uppercase;
+      letter-spacing: 1.2px; margin: 24px 0 10px 0; font-weight: 500;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td {
+      text-align: left; padding: 8px 10px; border-bottom: 1px solid #16161c;
+      font-size: 12px;
+    }
+    th {
+      color: #6f6f7a; font-weight: 500; text-transform: uppercase;
+      font-size: 10px; letter-spacing: 1px;
+    }
+    tr:hover td { background: #101015; }
+    .up { color: #7fffb0; }
+    .down { color: #ff9090; }
+    .pending { color: #8a8a95; }
+    .correct { color: #7fffb0; }
+    .incorrect { color: #ff9090; }
+    .status-learning { color: #8a8a95; font-style: italic; }
+    .status-firing { color: #ffcf8f; }
+    .status-profitable { color: #7fffb0; font-weight: 600; }
+    .sig {
+      font-size: 11px; color: #6f6f7a; max-width: 260px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .num { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div>
+      <span class="title">SIGNALS</span>
+      <span class="dot">·</span>
+      <span class="sub">BTC/USD · BC.GAME · live engine predictions</span>
+    </div>
+    <div class="sub" id="window-label">last 24h</div>
+  </div>
+
+  <div class="banner quiet" id="banner">loading…</div>
+
+  <div class="wrap">
+    <h2>Engine performance</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Engine</th>
+          <th class="num">Signals</th>
+          <th class="num">Correct</th>
+          <th class="num">Incorrect</th>
+          <th class="num">Pending</th>
+          <th class="num">Accuracy</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="stats-body"></tbody>
+    </table>
+
+    <h2>Recent signals</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Engine</th>
+          <th>Dir</th>
+          <th class="num">Conf</th>
+          <th class="num">Price</th>
+          <th class="num">Actual</th>
+          <th>Result</th>
+          <th>Signature</th>
+        </tr>
+      </thead>
+      <tbody id="signals-body"></tbody>
+    </table>
+  </div>
+
+<script>
+const API_KEY_STORAGE = "btcusd_signals_api_key";
+const POLL_MS = 10000;
+const HOURS = 24;
+
+function getKey() {
+  const url = new URL(location.href);
+  const k = url.searchParams.get("key");
+  if (k) {
+    sessionStorage.setItem(API_KEY_STORAGE, k);
+    url.searchParams.delete("key");
+    history.replaceState({}, "", url.toString());
+    return k;
+  }
+  let stored = sessionStorage.getItem(API_KEY_STORAGE);
+  if (!stored) {
+    stored = window.prompt("Enter your COLLECTOR_API_KEY (stored in this browser session only):");
+    if (stored) sessionStorage.setItem(API_KEY_STORAGE, stored.trim());
+  }
+  return (stored || "").trim();
+}
+
+let apiKey = getKey();
+let lastData = null;
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toTimeString().slice(0, 8);
+}
+
+function fmtNum(v, dp = 2) {
+  if (v === null || v === undefined) return "—";
+  return Number(v).toFixed(dp);
+}
+
+function statusFor(stat) {
+  if (stat.total === 0) return ["learning", "status-learning"];
+  if (stat.accuracy === null) return ["pending", "status-firing"];
+  if (stat.accuracy >= 0.55) return ["edge", "status-profitable"];
+  if (stat.accuracy >= 0.50) return ["marginal", "status-firing"];
+  return ["below chance", "status-learning"];
+}
+
+function render() {
+  if (!lastData) return;
+
+  const banner = document.getElementById("banner");
+  const n = lastData.signal_count;
+  if (n === 0) {
+    banner.className = "banner quiet";
+    banner.textContent = "No predictions in the last " + lastData.window_hours + " hours — all engines are learning.";
+  } else {
+    banner.className = "banner fired";
+    banner.textContent = "🎯 " + n + " prediction" + (n === 1 ? "" : "s") +
+      " in the last " + lastData.window_hours + " hours.";
+  }
+  document.getElementById("window-label").textContent =
+    "last " + lastData.window_hours + "h · updated " + fmtTime(lastData.now);
+
+  const sbody = document.getElementById("stats-body");
+  sbody.innerHTML = "";
+  for (const s of lastData.engine_stats) {
+    const [label, cls] = statusFor(s);
+    const acc = s.accuracy === null ? "—" : (s.accuracy * 100).toFixed(1) + "%";
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td>" + s.engine + "</td>" +
+      "<td class='num'>" + s.total + "</td>" +
+      "<td class='num correct'>" + s.correct + "</td>" +
+      "<td class='num incorrect'>" + s.incorrect + "</td>" +
+      "<td class='num pending'>" + s.pending + "</td>" +
+      "<td class='num'>" + acc + "</td>" +
+      "<td class='" + cls + "'>" + label + "</td>";
+    sbody.appendChild(tr);
+  }
+
+  const body = document.getElementById("signals-body");
+  body.innerHTML = "";
+  for (const sig of lastData.signals) {
+    const dirCls = sig.direction === "UP" ? "up" : "down";
+    let result = "pending";
+    let rcls = "pending";
+    if (sig.correct === true) { result = "✓ correct"; rcls = "correct"; }
+    else if (sig.correct === false) { result = "✗ incorrect"; rcls = "incorrect"; }
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td class='num'>" + fmtTime(sig.prediction_timestamp) + "</td>" +
+      "<td>" + sig.engine + "</td>" +
+      "<td class='" + dirCls + "'>" + sig.direction + "</td>" +
+      "<td class='num'>" + (sig.confidence !== null ? (sig.confidence * 100).toFixed(1) + "%" : "—") + "</td>" +
+      "<td class='num'>" + fmtNum(sig.price_at_prediction) + "</td>" +
+      "<td class='num'>" + fmtNum(sig.actual_price) + "</td>" +
+      "<td class='" + rcls + "'>" + result + "</td>" +
+      "<td class='sig' title='" + (sig.pattern_signature || "") + "'>" +
+        (sig.pattern_signature || "—") + "</td>";
+    body.appendChild(tr);
+  }
+}
+
+async function poll() {
+  if (!apiKey) { apiKey = getKey(); if (!apiKey) return; }
+  try {
+    const res = await fetch(
+      "/api/signals/recent?hours=" + HOURS + "&limit=100",
+      { headers: { authorization: "Bearer " + apiKey } }
+    );
+    if (res.status === 401) {
+      sessionStorage.removeItem(API_KEY_STORAGE);
+      apiKey = "";
+      document.getElementById("banner").textContent = "invalid API key";
+      return;
+    }
+    if (res.ok) {
+      lastData = await res.json();
+      render();
+    }
+  } catch (e) {
+    document.getElementById("banner").textContent = "error: " + e.message;
+  }
+}
+
+poll();
+setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>
