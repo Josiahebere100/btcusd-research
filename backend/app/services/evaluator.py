@@ -1,9 +1,11 @@
-"""Outcome evaluator + pattern memory hook."""
+"""Outcome evaluator + pattern memory + combination memory hooks."""
 import json
 from datetime import datetime
 from typing import Optional
 
 from ..db import get_pool
+from ..state import note_outcome_evaluated
+from .combination import record_combination_outcome
 from .pattern_memory import record_signature_outcome
 
 
@@ -32,17 +34,19 @@ async def _price_at(conn, target: datetime) -> Optional[float]:
         return float(row[0]) if row else None
 
 
-def _parse_signatures(raw: Optional[str]) -> dict:
+def _parse_signatures(raw: Optional[str]):
+    """Return (engine_signatures_dict, combination_key_or_None)."""
     if not raw:
-        return {}
+        return {}, None
     try:
         parsed = json.loads(raw)
         if isinstance(parsed, dict):
-            return parsed
-        return {"unknown": str(parsed)}
+            comb = parsed.pop("_combination", None)
+            return parsed, comb
+        return {"unknown": str(parsed)}, None
     except (json.JSONDecodeError, ValueError):
-        # Backwards compat: plain-string signature from before Phase 16.
-        return {"crt": raw}
+        # Legacy plain-string signature.
+        return {"crt": raw}, None
 
 
 async def evaluate_prediction(
@@ -73,11 +77,6 @@ async def evaluate_prediction(
             price_at_pred = float(pred[4])
             pred_direction = pred[5]
             sig_raw = pred[6]
-
-            if pred_direction not in ("UP", "DOWN"):
-                # No directional call: still mark EVALUATED. Pattern memory
-                # will be populated from the actual_direction below.
-                pass
 
             actual_price = await _price_at(conn, target)
             if actual_price is None:
@@ -121,9 +120,9 @@ async def evaluate_prediction(
             )
         await conn.commit()
 
-    # Record pattern memory outside the transaction (separate pools).
-    sig_map = _parse_signatures(sig_raw)
-    for eng_name, sig in sig_map.items():
+    # Pattern memory (per engine).
+    engine_sigs, comb_key = _parse_signatures(sig_raw)
+    for eng_name, sig in engine_sigs.items():
         try:
             await record_signature_outcome(
                 signature=sig,
@@ -135,3 +134,21 @@ async def evaluate_prediction(
             )
         except Exception as e:
             print(f"[pattern_memory] failed sig={sig}: {e}")
+
+    # Combination memory.
+    if comb_key:
+        try:
+            await record_combination_outcome(
+                key=comb_key,
+                actual_direction=actual_direction,
+            )
+        except Exception as e:
+            print(f"[combination_memory] failed key={comb_key}: {e}")
+
+    note_outcome_evaluated()
+
+    print(
+        f"[evaluator] #{prediction_id} "
+        f"pred={pred_direction} actual={actual_direction} "
+        f"correct={correct} pct={pct:.4f}"
+    )
