@@ -1,36 +1,37 @@
 """BTC/USD Research Backend — FastAPI entry point."""
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.db import close_pool, get_pool
-from app.routes import collector
+from app.routes import collector, research
+
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: warm the DB pool
     try:
         await get_pool()
     except Exception as e:
-        # Do not crash — health route will report the error.
         print(f"[startup] DB pool init failed: {e}")
     yield
-    # Shutdown: close pool
     await close_pool()
 
 
 app = FastAPI(
     title="BTC/USD Research Backend",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
 )
 
-# Mount the collector routes
 app.include_router(collector.router, prefix="/api/collector", tags=["collector"])
+app.include_router(research.router, prefix="/api/research", tags=["research"])
 
 
 @app.get("/")
@@ -38,12 +39,28 @@ async def root():
     return {"status": "ok", "service": "btcusd-research-backend"}
 
 
-# Safety net: ensure /api/* NEVER falls back to HTML for unknown routes.
+@app.get("/research")
+async def research_page():
+    """Serve the live research dashboard."""
+    index = STATIC_DIR / "index.html"
+    if not index.exists():
+        return JSONResponse(
+            status_code=500,
+            content={"error": "static/index.html not found"},
+        )
+    return FileResponse(index)
+
+
+# Mount static assets. Note: main.py lives in backend/, so STATIC_DIR is
+# backend/static/. We mount at /static.
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# Safety net: /api/* never falls through to HTML.
 @app.exception_handler(404)
 async def not_found(request: Request, exc):
-    if request.url.path.startswith("/api/"):
-        return JSONResponse(
-            status_code=404,
-            content={"error": "not_found", "path": request.url.path},
-        )
-    return JSONResponse(status_code=404, content={"error": "not_found"})
+    return JSONResponse(
+        status_code=404,
+        content={"error": "not_found", "path": request.url.path},
+    )
