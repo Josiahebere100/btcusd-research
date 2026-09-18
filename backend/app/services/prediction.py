@@ -1,11 +1,6 @@
-"""Prediction snapshot system.
-
-Creates immutable snapshots of engine outputs for each active round,
-locks them before trade cutoff, and evaluates them at target time.
-
-Every snapshot is immutable. Historical predictions are never rewritten.
-"""
+"""Prediction snapshot system."""
 import asyncio
+import inspect
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
@@ -15,26 +10,35 @@ from ..config import (
 )
 from ..db import get_pool
 from ..engines.base import Engine, EngineContext, EngineOutput
+from ..engines.crt import CRTEngine
 from ..engines.stub import StubEngine
 
 
 # ---- Engine registry -------------------------------------------------------
 
-_engines: List[Engine] = [StubEngine()]
+_engines: List[Engine] = [
+    CRTEngine(),
+    # StubEngine() intentionally disabled once CRT is registered.
+]
 
 
 def get_engines() -> List[Engine]:
     return _engines
 
 
-# ---- Helpers --------------------------------------------------------------
+# ---- Engine execution -----------------------------------------------------
 
 
-def _run_engines(ctx: EngineContext) -> List[EngineOutput]:
+async def _run_engines(ctx: EngineContext) -> List[EngineOutput]:
     outputs: List[EngineOutput] = []
     for engine in _engines:
         try:
-            out = engine.run(ctx)
+            if engine.is_async or inspect.iscoroutinefunction(
+                getattr(engine, "run_async", None)
+            ):
+                out = await engine.run_async(ctx)
+            else:
+                out = engine.run(ctx)
             out.validate()
             outputs.append(out)
         except Exception as e:
@@ -42,14 +46,20 @@ def _run_engines(ctx: EngineContext) -> List[EngineOutput]:
     return outputs
 
 
-def _pick_direction(outputs: List[EngineOutput]) -> Tuple[str, Optional[float]]:
-    """For Phase 11, the primary engine is the stub, so we just return
-    whatever it says. When multiple engines exist, this function will
-    consult the combination statistics table (Phase 17)."""
+def _pick_direction(
+    outputs: List[EngineOutput],
+) -> Tuple[str, Optional[float], Optional[str]]:
+    """Choose a combined direction and return the (direction, confidence,
+    pattern_signature). Priority: first non-NO_SIGNAL engine output."""
     for o in outputs:
         if o.direction != "NO_SIGNAL":
-            return o.direction, o.confidence
-    return "NO_SIGNAL", None
+            return o.direction, o.confidence, o.pattern_signature
+    # No signal from any engine; still record the first pattern signature
+    # if present for research purposes.
+    for o in outputs:
+        if o.pattern_signature:
+            return "NO_SIGNAL", None, o.pattern_signature
+    return "NO_SIGNAL", None, None
 
 
 # ---- Snapshot creation ----------------------------------------------------
@@ -66,24 +76,15 @@ async def create_prediction_for_round(
     recent_ticks: List[Tuple[float, float]],
     horizon_seconds: Optional[int] = None,
 ) -> Optional[int]:
-    """Create a prediction snapshot for a round.
-
-    Returns the prediction row id, or None if it could not be created.
-    """
     horizon = horizon_seconds or PREDICTION_HORIZON_SECONDS
     now = datetime.now(timezone.utc)
-
-    # Compute target timestamp. Existing predictions retain their original
-    # horizon even if the setting later changes.
     target = now + timedelta(seconds=horizon)
 
-    # Compute lock deadline.
     lock_deadline = trade_cutoff - timedelta(
         milliseconds=PREDICTION_SAFETY_BUFFER_MS
     )
     lead_time_ms = int((lock_deadline - now).total_seconds() * 1000)
 
-    # Determine status
     if now >= trade_cutoff:
         status = "INVALID"
     elif lead_time_ms < PREDICTION_SAFETY_BUFFER_MS:
@@ -91,7 +92,6 @@ async def create_prediction_for_round(
     else:
         status = "LOCKED"
 
-    # Run engines
     ctx = EngineContext(
         session_id=session_id,
         round_id=round_id,
@@ -103,54 +103,19 @@ async def create_prediction_for_round(
         current_price=current_price,
         recent_ticks=recent_ticks,
     )
-    outputs = _run_engines(ctx)
-    direction, confidence = _pick_direction(outputs)
+    outputs = await _run_engines(ctx)
+    direction, confidence, pattern_sig = _pick_direction(outputs)
 
-    # Pick the pattern signature from the primary engine if any
-    pattern_sig = None
+    # Record the engine that produced the signal (or the first engine).
+    primary_engine = "none"
     for o in outputs:
-        if o.pattern_signature:
-            pattern_sig = o.pattern_signature
+        if o.direction != "NO_SIGNAL":
+            primary_engine = o.engine
             break
+    if primary_engine == "none" and outputs:
+        primary_engine = outputs[0].engine
 
-    # Store the snapshot.
     pool = await get_pool()
-    async with pool.connection() as conn:
-        row = await conn.execute(
-            """
-            INSERT INTO prediction_snapshots
-              (session_id, round_id, symbol, source, horizon_seconds,
-               prediction_timestamp, information_cutoff_timestamp,
-               target_timestamp, price_at_prediction, direction,
-               confidence, lead_time_ms, status, pattern_signature, engine)
-            VALUES
-              (%s, %s, 'BTC/USD', 'BC.GAME', %s,
-               %s, %s,
-               %s, %s, %s,
-               %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                session_id,
-                round_id,
-                horizon,
-                now,
-                now,
-                target,
-                current_price,
-                direction,
-                confidence,
-                lead_time_ms,
-                status,
-                pattern_sig,
-                outputs[0].engine if outputs else "none",
-            ),
-        )
-        # asyncpg returns "INSERT 0 1"; psycopg3 doesn't RETURNING via execute.
-        # Use fetchone instead.
-        pass
-
-        # Re-do with fetchrow for portability.
     async with pool.connection() as conn:
         row = await conn.fetchrow(
             """
@@ -179,7 +144,7 @@ async def create_prediction_for_round(
                 lead_time_ms,
                 status,
                 pattern_sig,
-                outputs[0].engine if outputs else "none",
+                primary_engine,
             ),
         )
         await conn.commit()
@@ -188,7 +153,6 @@ async def create_prediction_for_round(
     if prediction_id is None:
         return None
 
-    # Schedule evaluation at target time (fire and forget).
     if status in ("LOCKED", "EVALUATED"):
         asyncio.create_task(
             _schedule_evaluation(prediction_id, target, direction)
@@ -202,12 +166,10 @@ async def _schedule_evaluation(
     target: datetime,
     predicted_direction: str,
 ) -> None:
-    """Sleep until target time, then evaluate."""
     now = datetime.now(timezone.utc)
     delay = (target - now).total_seconds()
     if delay > 0:
         await asyncio.sleep(delay)
-    # Import here to avoid circular imports.
     from .evaluator import evaluate_prediction
 
     try:
