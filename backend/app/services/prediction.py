@@ -12,11 +12,13 @@ from ..db import get_pool
 from ..engines.base import Engine, EngineContext, EngineOutput
 from ..engines.crt import CRTEngine
 from ..engines.labouchere import LabouchereEngine
+from ..engines.trig_euler import TrigEulerEngine
 
 
 _engines: List[Engine] = [
     CRTEngine(),
     LabouchereEngine(),
+    TrigEulerEngine(),
 ]
 
 
