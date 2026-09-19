@@ -35,7 +35,6 @@ async def _price_at(conn, target: datetime) -> Optional[float]:
 
 
 def _parse_signatures(raw: Optional[str]):
-    """Return (engine_signatures_dict, combination_key_or_None)."""
     if not raw:
         return {}, None
     try:
@@ -45,7 +44,6 @@ def _parse_signatures(raw: Optional[str]):
             return parsed, comb
         return {"unknown": str(parsed)}, None
     except (json.JSONDecodeError, ValueError):
-        # Legacy plain-string signature.
         return {"crt": raw}, None
 
 
@@ -120,7 +118,7 @@ async def evaluate_prediction(
             )
         await conn.commit()
 
-    # Pattern memory (per engine).
+    # Pattern memory per engine.
     engine_sigs, comb_key = _parse_signatures(sig_raw)
     for eng_name, sig in engine_sigs.items():
         try:
@@ -141,6 +139,8 @@ async def evaluate_prediction(
             await record_combination_outcome(
                 key=comb_key,
                 actual_direction=actual_direction,
+                session_id=session_id,
+                prediction_id=pred_id,
             )
         except Exception as e:
             print(f"[combination_memory] failed key={comb_key}: {e}")
