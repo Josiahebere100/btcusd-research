@@ -104,7 +104,7 @@
 <script>
 const API_KEY_STORAGE = "btcusd_signals_api_key";
 const POLL_MS = 10000;
-const HOURS = 24;
+const HOURS = 168;
 
 function getKey() {
   const url = new URL(location.href);
@@ -205,7 +205,7 @@ async function poll() {
   if (!apiKey) { apiKey = getKey(); if (!apiKey) return; }
   try {
     const res = await fetch(
-      "/api/signals/recent?hours=" + HOURS + "&limit=100",
+      "/api/signals/recent?hours=" + HOURS + "&limit=1000",
       { headers: { authorization: "Bearer " + apiKey } }
     );
     if (res.status === 401) {
