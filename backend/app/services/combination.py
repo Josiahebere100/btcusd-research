@@ -1,82 +1,97 @@
-"""Combination engine.
-
-Records the tuple of (engine, direction) from every prediction, and
-tracks what the market actually did after each combination appeared.
-
-Direction is determined by empirical frequency, NOT by vote. A combination
-only emits a signal when it has >=10 samples with >=55% directional bias.
-"""
-from typing import List, Optional, Tuple
+"""Combination engine with Wilson confidence interval."""
+import math
+from typing import Dict, List, Optional, Tuple
 
 from ..db import get_pool
 from ..engines.base import EngineOutput
 
-MIN_OCCURRENCES = 10
-MIN_BIAS = 0.55
+MIN_OCCURRENCES = 20
+MIN_RECENT_OCCURRENCES = 40
+RECENT_WINDOW = 50
+CONFIDENCE_Z = 1.96
 
 
 def combination_key(outputs: List[EngineOutput]) -> str:
-    """Build a stable, sorted combination key from all engine outputs."""
     parts = [f"{o.engine}:{o.direction}" for o in outputs]
     parts.sort()
     return "|".join(parts)
 
 
-def _implied_from_history(correct: int, incorrect: int) -> Optional[str]:
-    """Given historical counts, return 'UP' or 'DOWN' if bias is sufficient."""
-    total = correct + incorrect
-    if total < MIN_OCCURRENCES:
-        return None
-    p_up = correct / total
-    if p_up >= MIN_BIAS:
-        return "UP"
-    if p_up <= (1 - MIN_BIAS):
-        return "DOWN"
-    return None
+def _wilson_bounds(p: float, n: int, z: float = CONFIDENCE_Z) -> Tuple[float, float]:
+    if n <= 0:
+        return (0.0, 1.0)
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    center = p + z2 / (2.0 * n)
+    margin = z * math.sqrt(p * (1.0 - p) / n + z2 / (4.0 * n * n))
+    lower = (center - margin) / denom
+    upper = (center + margin) / denom
+    return (max(0.0, lower), min(1.0, upper))
 
 
 async def lookup_combination(key: str) -> Optional[Tuple[str, float, int]]:
-    """Return (direction, confidence, occurrences) if this combination
-    has enough history and sufficient bias; else None."""
     pool = await get_pool()
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                """
-                SELECT occurrences, correct, incorrect
-                FROM combination_signals
-                WHERE combination = %s
-                """,
+                "SELECT occurrences FROM combination_signals WHERE combination = %s",
                 (key,),
             )
             row = await cur.fetchone()
             if not row:
                 return None
             occurrences = int(row[0] or 0)
-            correct = int(row[1] or 0)
-            incorrect = int(row[2] or 0)
-
-            direction = _implied_from_history(correct, incorrect)
-            if direction is None:
+            if occurrences < MIN_OCCURRENCES:
                 return None
 
-            total = correct + incorrect
-            p_up = correct / total
-            confidence = p_up if direction == "UP" else (1 - p_up)
-            return direction, confidence, total
+            await cur.execute(
+                """
+                SELECT actual_direction
+                FROM combination_outcomes
+                WHERE combination = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (key, RECENT_WINDOW),
+            )
+            recent = await cur.fetchall()
+
+    n_total = len(recent)
+    if n_total < MIN_RECENT_OCCURRENCES:
+        return None
+
+    n_up = sum(1 for r in recent if r[0] == "UP")
+    p_up = n_up / n_total
+    lower, upper = _wilson_bounds(p_up, n_total)
+
+    if lower > 0.50:
+        return ("UP", lower, n_total)
+    if upper < 0.50:
+        return ("DOWN", 1.0 - upper, n_total)
+    return None
 
 
 async def record_combination_outcome(
     key: str,
-    actual_direction: str,  # "UP" | "DOWN" | "FLAT"
+    actual_direction: str,
+    session_id: Optional[str] = None,
+    prediction_id: Optional[int] = None,
 ) -> None:
-    """Called by the evaluator after each outcome.
-    correct = market went UP; incorrect = market went DOWN (tracking bias)."""
     if actual_direction not in ("UP", "DOWN"):
         return
+
     pool = await get_pool()
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO combination_outcomes
+                  (combination, session_id, prediction_id, actual_direction)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (key, session_id, prediction_id, actual_direction),
+            )
+
             if actual_direction == "UP":
                 await cur.execute(
                     """
@@ -101,19 +116,42 @@ async def record_combination_outcome(
                     """,
                     (key,),
                 )
-            # Refresh the derived fields.
+
+            await cur.execute(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE actual_direction = 'UP') AS n_up,
+                    COUNT(*) AS n_total
+                FROM (
+                    SELECT actual_direction
+                    FROM combination_outcomes
+                    WHERE combination = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                ) sub
+                """,
+                (key, RECENT_WINDOW),
+            )
+            ra = await cur.fetchone()
+            recent_acc = None
+            if ra and ra[1] and int(ra[1]) > 0:
+                recent_up = int(ra[0] or 0)
+                recent_total = int(ra[1])
+                recent_acc = recent_up / recent_total
+
             await cur.execute(
                 """
                 UPDATE combination_signals
                 SET accuracy = correct::numeric / NULLIF(correct + incorrect, 0),
-                    recent_accuracy = correct::numeric / NULLIF(correct + incorrect, 0),
+                    recent_accuracy = %s,
                     combined_output = CASE
-                      WHEN correct::numeric / NULLIF(correct + incorrect, 0) >= 0.55 THEN 'UP'
-                      WHEN correct::numeric / NULLIF(correct + incorrect, 0) <= 0.45 THEN 'DOWN'
+                      WHEN %s >= 0.55 THEN 'UP'
+                      WHEN %s <= 0.45 THEN 'DOWN'
                       ELSE 'NO_SIGNAL'
                     END
                 WHERE combination = %s
                 """,
-                (key,),
+                (recent_acc, recent_acc, recent_acc, key),
             )
+
         await conn.commit()
