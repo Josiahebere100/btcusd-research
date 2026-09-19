@@ -11,6 +11,7 @@ from ..config import (
 )
 from ..db import get_pool
 from ..engines.base import Engine, EngineContext, EngineOutput
+from ..engines.candlestick import CandlestickEngine
 from ..engines.crt import CRTEngine
 from ..engines.entropy_regime import EntropyRegimeEngine
 from ..engines.labouchere import LabouchereEngine
@@ -27,8 +28,8 @@ _engines: List[Engine] = [
     EntropyRegimeEngine(),
     SuperformulaEngine(),
     NavierStokesAutomatonEngine(),
+    CandlestickEngine(),
 ]
-
 
 def get_engines() -> List[Engine]:
     return _engines
@@ -54,6 +55,8 @@ async def _pick_direction(outputs: List[EngineOutput]):
     for o in outputs:
         if o.pattern_signature:
             signatures[o.engine] = o.pattern_signature
+        if o.direction in ("UP", "DOWN"):
+            signatures[f"{o.engine}_dir"] = o.direction
 
     comb_key = combination_key(outputs)
     all_neutral = all(o.direction == "NO_SIGNAL" for o in outputs)
@@ -119,6 +122,16 @@ async def create_prediction_for_round(
         recent_ticks=recent_ticks,
     )
     outputs = await _run_engines(ctx)
+
+    # Meta-ensemble runs after base engines and consumes their outputs.
+    from .meta_ensemble import run_meta_ensemble
+    try:
+        meta_out = await run_meta_ensemble(outputs, ctx)
+        if meta_out is not None:
+            outputs = outputs + [meta_out]
+    except Exception as e:
+        print(f"[meta_ensemble] failed: {e}")
+
     direction, confidence, sig_json, primary_source, _comb_key = (
         await _pick_direction(outputs)
     )
