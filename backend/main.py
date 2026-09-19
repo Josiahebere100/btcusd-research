@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.db import close_pool, get_pool
-from app.routes import collector, research, signals
+from app.routes import collector, memory, research, signals
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -33,6 +33,7 @@ app = FastAPI(
 app.include_router(collector.router, prefix="/api/collector", tags=["collector"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(signals.router, prefix="/api/signals", tags=["signals"])
+app.include_router(memory.router, prefix="/api/memory", tags=["memory"])
 
 
 @app.get("/")
@@ -58,6 +59,16 @@ async def signals_page():
         return JSONResponse(
             status_code=500,
             content={"error": "static/signals.html not found"},
+        )
+    return FileResponse(page)
+
+@app.get("/memory")
+async def memory_page():
+    page = STATIC_DIR / "memory.html"
+    if not page.exists():
+        return JSONResponse(
+            status_code=500,
+            content={"error": "static/memory.html not found"},
         )
     return FileResponse(page)
 
