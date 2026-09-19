@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Memory · BTC/USD Research</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 0; background: #0a0a0c; color: #d7d7dd;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px; min-height: 100vh;
+    }
+    .topbar {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 20px; border-bottom: 1px solid #1a1a20; background: #0d0d10;
+      position: sticky; top: 0; z-index: 10;
+    }
+    .title { color: #e8e8ee; font-weight: 600; letter-spacing: 0.5px; }
+    .dot { color: #4a4a55; margin: 0 8px; }
+    .sub { color: #6f6f7a; }
+    .tabs { display: flex; gap: 6px; padding: 12px 20px;
+      border-bottom: 1px solid #14141a; background: #0d0d10; }
+    .tab {
+      padding: 6px 14px; border: 1px solid #26262e; background: #14141a;
+      color: #6f6f7a; border-radius: 3px; cursor: pointer;
+      font-family: inherit; font-size: 12px; letter-spacing: 0.4px;
+    }
+    .tab.on { background: #1b2a44; color: #cfe0ff; border-color: #2e4b7a; }
+    .wrap { padding: 20px; max-width: 1600px; margin: 0 auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td {
+      text-align: left; padding: 6px 10px; border-bottom: 1px solid #16161c;
+      font-size: 12px;
+    }
+    th {
+      color: #6f6f7a; font-weight: 500; text-transform: uppercase;
+      font-size: 10px; letter-spacing: 1px;
+      position: sticky; top: 90px; background: #0a0a0c;
+    }
+    tr:hover td { background: #101015; }
+    .sig {
+      font-size: 11px; color: #b0b0bb; max-width: 480px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .num { font-variant-numeric: tabular-nums; text-align: right; }
+    .up { color: #7fffb0; }
+    .down { color: #ff9090; }
+    .correct { color: #7fffb0; }
+    .incorrect { color: #ff9090; }
+    .pending { color: #8a8a95; }
+    .hint { color: #4a4a55; font-size: 11px; padding: 8px 0; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div>
+      <span class="title">MEMORY</span>
+      <span class="dot">·</span>
+      <span class="sub">patterns · combinations · engine stats</span>
+    </div>
+    <div class="sub" id="updated">—</div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab on" data-tab="patterns">PATTERNS</button>
+    <button class="tab" data-tab="combinations">COMBINATIONS</button>
+    <button class="tab" data-tab="engines">ENGINE STATS</button>
+  </div>
+
+  <div class="wrap">
+    <div id="hint" class="hint"></div>
+    <div id="table-wrap"></div>
+  </div>
+
+<script>
+const API_KEY_STORAGE = "btcusd_memory_api_key";
+const POLL_MS = 15000;
+let apiKey = getKey();
+let currentTab = "patterns";
+
+function getKey() {
+  const url = new URL(location.href);
+  const k = url.searchParams.get("key");
+  if (k) {
+    sessionStorage.setItem(API_KEY_STORAGE, k);
+    url.searchParams.delete("key");
+    history.replaceState({}, "", url.toString());
+    return k;
+  }
+  let s = sessionStorage.getItem(API_KEY_STORAGE);
+  if (!s) {
+    s = window.prompt("Enter your COLLECTOR_API_KEY:");
+    if (s) sessionStorage.setItem(API_KEY_STORAGE, s.trim());
+  }
+  return (s || "").trim();
+}
+
+function fmtPct(v) {
+  if (v === null || v === undefined) return "—";
+  return (v * 100).toFixed(1) + "%";
+}
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  return iso.slice(11, 19);
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  })[c]);
+}
+
+async function loadTab() {
+  document.getElementById("hint").textContent =
+    currentTab === "patterns" ? "Signatures learned by the base engines. Prefix identifies engine (crt:, lab:, trig:, ent:, sf:, ns:, cs:)."
+    : currentTab === "combinations" ? "Full combos across all engines. 'combination' column is the pipe-joined state."
+    : "Per-engine directional calls and outcomes over the window.";
+
+  const endpoints = {
+    patterns: "/api/memory/patterns?limit=300&min_occurrences=1",
+    combinations: "/api/memory/combinations?limit=300&min_occurrences=1",
+    engines: "/api/memory/engine-stats?hours=168",
+  };
+
+  try {
+    const res = await fetch(endpoints[currentTab], {
+      headers: { authorization: "Bearer " + apiKey }
+    });
+    if (res.status === 401) {
+      sessionStorage.removeItem(API_KEY_STORAGE);
+      apiKey = getKey();
+      return;
+    }
+    const data = await res.json();
+    render(data);
+    document.getElementById("updated").textContent =
+      "updated " + new Date().toTimeString().slice(0, 8);
+  } catch (e) {
+    document.getElementById("table-wrap").innerHTML =
+      "<div style='color:#ff9090'>error: " + esc(e.message) + "</div>";
+  }
+}
+
+function render(data) {
+  const wrap = document.getElementById("table-wrap");
+  if (currentTab === "patterns") {
+    const rows = data.patterns || [];
+    let html = "<table><thead><tr>" +
+      "<th>Signature</th><th class='num'>Occ</th><th class='num'>Corr</th>" +
+      "<th class='num'>Incorr</th><th class='num'>Acc</th>" +
+      "<th class='num'>Recent</th><th>Last seen</th>" +
+      "</tr></thead><tbody>";
+    for (const p of rows) {
+      const accCls = p.accuracy == null ? "" :
+        p.accuracy >= 0.55 ? "correct" :
+        p.accuracy <= 0.45 ? "incorrect" : "";
+      const rAccCls = p.recent_accuracy == null ? "" :
+        p.recent_accuracy >= 0.55 ? "correct" :
+        p.recent_accuracy <= 0.45 ? "incorrect" : "";
+      html += "<tr>" +
+        "<td class='sig' title='" + esc(p.signature) + "'>" + esc(p.signature) + "</td>" +
+        "<td class='num'>" + p.occurrences + "</td>" +
+        "<td class='num correct'>" + p.correct + "</td>" +
+        "<td class='num incorrect'>" + p.incorrect + "</td>" +
+        "<td class='num " + accCls + "'>" + fmtPct(p.accuracy) + "</td>" +
+        "<td class='num " + rAccCls + "'>" + fmtPct(p.recent_accuracy) + "</td>" +
+        "<td class='num'>" + fmtTime(p.last_seen) + "</td>" +
+        "</tr>";
+    }
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+  } else if (currentTab === "combinations") {
+    const rows = data.combinations || [];
+    let html = "<table><thead><tr>" +
+      "<th>Combination</th><th class='num'>Occ</th><th class='num'>Corr</th>" +
+      "<th class='num'>Incorr</th><th class='num'>Acc</th>" +
+      "<th class='num'>Recent</th><th>Output</th>" +
+      "</tr></thead><tbody>";
+    for (const c of rows) {
+      const accCls = c.accuracy == null ? "" :
+        c.accuracy >= 0.55 ? "correct" :
+        c.accuracy <= 0.45 ? "incorrect" : "";
+      const rAccCls = c.recent_accuracy == null ? "" :
+        c.recent_accuracy >= 0.55 ? "correct" :
+        c.recent_accuracy <= 0.45 ? "incorrect" : "";
+      const outCls = c.combined_output === "UP" ? "up" :
+        c.combined_output === "DOWN" ? "down" : "pending";
+      html += "<tr>" +
+        "<td class='sig' title='" + esc(c.combination) + "'>" + esc(c.combination) + "</td>" +
+        "<td class='num'>" + c.occurrences + "</td>" +
+        "<td class='num correct'>" + c.correct + "</td>" +
+        "<td class='num incorrect'>" + c.incorrect + "</td>" +
+        "<td class='num " + accCls + "'>" + fmtPct(c.accuracy) + "</td>" +
+        "<td class='num " + rAccCls + "'>" + fmtPct(c.recent_accuracy) + "</td>" +
+        "<td class='" + outCls + "'>" + esc(c.combined_output) + "</td>" +
+        "</tr>";
+    }
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+  } else {
+    const rows = data.engines || [];
+    let html = "<table><thead><tr>" +
+      "<th>Engine</th><th class='num'>Signals</th>" +
+      "<th class='num'>UP</th><th class='num'>DOWN</th>" +
+      "<th class='num'>Correct</th><th class='num'>Incorrect</th>" +
+      "<th class='num'>Accuracy</th>" +
+      "</tr></thead><tbody>";
+    for (const e of rows) {
+      const accCls = e.accuracy == null ? "" :
+        e.accuracy >= 0.55 ? "correct" :
+        e.accuracy <= 0.45 ? "incorrect" : "";
+      html += "<tr>" +
+        "<td>" + esc(e.engine) + "</td>" +
+        "<td class='num'>" + e.total + "</td>" +
+        "<td class='num up'>" + e.up_calls + "</td>" +
+        "<td class='num down'>" + e.down_calls + "</td>" +
+        "<td class='num correct'>" + e.correct + "</td>" +
+        "<td class='num incorrect'>" + e.incorrect + "</td>" +
+        "<td class='num " + accCls + "'>" + fmtPct(e.accuracy) + "</td>" +
+        "</tr>";
+    }
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+  }
+}
+
+document.querySelectorAll(".tab").forEach(t => {
+  t.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(x => x.classList.remove("on"));
+    t.classList.add("on");
+    currentTab = t.dataset.tab;
+    loadTab();
+  });
+});
+
+loadTab();
+setInterval(loadTab, POLL_MS);
+</script>
+</body>
+</html>
