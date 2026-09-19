@@ -45,7 +45,7 @@ async def _load_recent_outcomes(limit: int):
     pool = await get_pool()
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
-                        await cur.execute(
+            await cur.execute(
                 """
                 SELECT p.pattern_signature, o.actual_direction
                 FROM prediction_snapshots p
