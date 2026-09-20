@@ -1,4 +1,4 @@
-"""Memory endpoint: patterns, combinations, per-engine stats."""
+"""Memory endpoint: patterns, combinations, per-engine stats, supersignatures."""
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -8,6 +8,17 @@ from ..auth import require_collector_key
 from ..db import get_pool
 
 router = APIRouter()
+
+ENGINE_PREFIXES = {
+    "crt": "crt:",
+    "labouchere": "lab:",
+    "trig_euler": "trig:",
+    "entropy_regime": "ent:",
+    "superformula": "sf:",
+    "navier_stokes": "ns:",
+    "candlestick": "cs:",
+    "meta_ensemble": "meta:",
+}
 
 
 @router.get("/patterns")
@@ -28,11 +39,11 @@ async def list_patterns(
                            recent_accuracy, last_seen, ineligible
                     FROM patterns
                     WHERE occurrence_count >= %s
-                      AND pattern_signature LIKE %s
+                      AND LEFT(pattern_signature, %s) = %s
                     ORDER BY occurrence_count DESC
                     LIMIT %s
                     """,
-                    (min_occurrences, engine_prefix + "%", limit),
+                    (min_occurrences, len(engine_prefix), engine_prefix, limit),
                 )
             else:
                 await cur.execute(
@@ -145,118 +156,85 @@ async def engine_stats(
         })
     return {"window_hours": hours, "engines": out}
 
-@router.get("/by-engine-signatures")
-async def by_engine_signatures(
+
+@router.get("/by-engine")
+async def by_engine(
     engine: str = Query(..., min_length=1, max_length=40),
     hours: int = Query(168, ge=1, le=87600),
     limit: int = Query(200, ge=1, le=2000),
+    only_fired: bool = Query(True),
     _auth: str = Depends(require_collector_key),
 ) -> Dict[str, Any]:
-    """Aggregate stats for one engine's signatures within a time window."""
-    sig_key = engine
+    """Predictions where the given engine contributed.
+
+    Returns rows with the full supersignature, the combined direction,
+    the actual outcome, and whether the combined call was correct.
+    """
     dir_key = f"{engine}_dir"
 
     pool = await get_pool()
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(
-                """
-                WITH extracted AS (
-                  SELECT
-                    pattern_signature::jsonb ->> %s AS sig,
-                    pattern_signature::jsonb ->> %s AS sig_dir,
-                    o.correct AS correct
-                  FROM prediction_snapshots p
-                  LEFT JOIN outcomes o ON o.prediction_id = p.id
-                  WHERE LEFT(pattern_signature, 1) = '{'
-                    AND jsonb_exists(pattern_signature::jsonb, %s)
-                    AND pattern_signature::jsonb ->> %s IN ('UP','DOWN')
-                    AND prediction_timestamp >= now() - (%s * interval '1 hour')
+            if only_fired:
+                await cur.execute(
+                    """
+                    SELECT
+                      p.prediction_timestamp,
+                      p.direction,
+                      p.confidence,
+                      p.pattern_signature,
+                      o.actual_direction,
+                      o.correct,
+                      p.engine AS deciding_engine
+                    FROM prediction_snapshots p
+                    LEFT JOIN outcomes o ON o.prediction_id = p.id
+                    WHERE LEFT(p.pattern_signature, 1) = '{'
+                      AND jsonb_exists(p.pattern_signature::jsonb, %s)
+                      AND p.pattern_signature::jsonb ->> %s IN ('UP','DOWN')
+                      AND p.prediction_timestamp >= now() - (%s * interval '1 hour')
+                    ORDER BY p.prediction_timestamp DESC
+                    LIMIT %s
+                    """,
+                    (dir_key, dir_key, hours, limit),
                 )
-                SELECT
-                  sig,
-                  sig_dir,
-                  COUNT(*) AS n,
-                  COUNT(*) FILTER (WHERE correct = true) AS n_correct,
-                  COUNT(*) FILTER (WHERE correct = false) AS n_incorrect
-                FROM extracted
-                WHERE sig IS NOT NULL AND sig_dir IS NOT NULL
-                GROUP BY sig, sig_dir
-                ORDER BY n DESC
-                LIMIT %s
-                """,
-                (sig_key, dir_key, dir_key, dir_key, hours, limit),
-            )
+            else:
+                await cur.execute(
+                    """
+                    SELECT
+                      p.prediction_timestamp,
+                      p.direction,
+                      p.confidence,
+                      p.pattern_signature,
+                      o.actual_direction,
+                      o.correct,
+                      p.engine AS deciding_engine
+                    FROM prediction_snapshots p
+                    LEFT JOIN outcomes o ON o.prediction_id = p.id
+                    WHERE LEFT(p.pattern_signature, 1) = '{'
+                      AND jsonb_exists(p.pattern_signature::jsonb, %s)
+                      AND p.prediction_timestamp >= now() - (%s * interval '1 hour')
+                    ORDER BY p.prediction_timestamp DESC
+                    LIMIT %s
+                    """,
+                    (dir_key, hours, limit),
+                )
             rows = await cur.fetchall()
 
     out = []
     for r in rows:
-        n = int(r[2] or 0)
-        correct = int(r[3] or 0)
-        incorrect = int(r[4] or 0)
-        settled = correct + incorrect
         out.append({
-            "signature": r[0],
+            "at": r[0].isoformat() if r[0] else None,
             "direction": r[1],
-            "occurrences": n,
-            "correct": correct,
-            "incorrect": incorrect,
-            "accuracy": (correct / settled) if settled else None,
+            "confidence": float(r[2]) if r[2] is not None else None,
+            "signature": r[3],
+            "actual_direction": r[4],
+            "correct": r[5],
+            "deciding_engine": r[6],
         })
     return {
         "engine": engine,
         "window_hours": hours,
+        "only_fired": only_fired,
         "count": len(out),
-        "signatures": out,
+        "signals": out,
     }
-
-
-@router.get("/by-engine-recent")
-async def by_engine_recent(
-    engine: str = Query(..., min_length=1, max_length=40),
-    limit: int = Query(200, ge=1, le=2000),
-    _auth: str = Depends(require_collector_key),
-) -> Dict[str, Any]:
-    """Individual predictions for one engine."""
-    sig_key = engine
-    dir_key = f"{engine}_dir"
-
-    pool = await get_pool()
-    async with pool.connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                """
-                SELECT
-                  prediction_timestamp,
-                  pattern_signature::jsonb ->> %s AS sig,
-                  pattern_signature::jsonb ->> %s AS sig_dir,
-                  price_at_prediction,
-                  o.actual_price,
-                  o.actual_direction,
-                  o.correct,
-                  confidence
-                FROM prediction_snapshots p
-                LEFT JOIN outcomes o ON o.prediction_id = p.id
-                WHERE LEFT(pattern_signature, 1) = '{'
-                  AND jsonb_exists(pattern_signature::jsonb, %s)
-                  AND pattern_signature::jsonb ->> %s IN ('UP','DOWN')
-                ORDER BY prediction_timestamp DESC
-                LIMIT %s
-                """,
-                (sig_key, dir_key, dir_key, dir_key, limit),
-            )
-            rows = await cur.fetchall()
-
-    out = []
-    for r in rows:
-        out.append({
-            "prediction_timestamp": r[0].isoformat() if r[0] else None,
-            "signature": r[1],
-            "direction": r[2],
-            "price_at_prediction": float(r[3]) if r[3] is not None else None,
-            "actual_price": float(r[4]) if r[4] is not None else None,
-            "actual_direction": r[5],
-            "correct": r[6],
-            "confidence": float(r[7]) if r[7] is not None else None,
-        })
-    return {"engine": engine, "count": len(out), "signals": out}
