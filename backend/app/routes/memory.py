@@ -144,3 +144,111 @@ async def engine_stats(
             "accuracy": (correct / settled) if settled else None,
         })
     return {"window_hours": hours, "engines": out}
+
+@router.get("/by-engine-signatures")
+async def by_engine_signatures(
+    engine: str = Query(..., min_length=1, max_length=40),
+    hours: int = Query(168, ge=1, le=87600),
+    limit: int = Query(200, ge=1, le=2000),
+    _auth: str = Depends(require_collector_key),
+) -> Dict[str, Any]:
+    """Aggregate stats for one engine's signatures within a time window."""
+    sig_field = engine
+    dir_field = f"{engine}_dir"
+
+    pool = await get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT
+                  pattern_signature::jsonb ->> %s AS sig,
+                  pattern_signature::jsonb ->> %s AS dir,
+                  COUNT(*) AS n,
+                  COUNT(*) FILTER (WHERE o.correct = true) AS correct,
+                  COUNT(*) FILTER (WHERE o.correct = false) AS incorrect
+                FROM prediction_snapshots p
+                LEFT JOIN outcomes o ON o.prediction_id = p.id
+                WHERE pattern_signature LIKE '{%'
+                  AND pattern_signature::jsonb ? %s
+                  AND pattern_signature::jsonb ->> %s IN ('UP','DOWN')
+                  AND prediction_timestamp >= now() - (%s * interval '1 hour')
+                GROUP BY sig, dir
+                ORDER BY n DESC
+                LIMIT %s
+                """,
+                (sig_field, dir_field, dir_field, dir_field, hours, limit),
+            )
+            rows = await cur.fetchall()
+
+    out = []
+    for r in rows:
+        n = int(r[2] or 0)
+        correct = int(r[3] or 0)
+        incorrect = int(r[4] or 0)
+        settled = correct + incorrect
+        out.append({
+            "signature": r[0],
+            "direction": r[1],
+            "occurrences": n,
+            "correct": correct,
+            "incorrect": incorrect,
+            "accuracy": (correct / settled) if settled else None,
+        })
+    return {
+        "engine": engine,
+        "window_hours": hours,
+        "count": len(out),
+        "signatures": out,
+    }
+
+
+@router.get("/by-engine-recent")
+async def by_engine_recent(
+    engine: str = Query(..., min_length=1, max_length=40),
+    limit: int = Query(200, ge=1, le=2000),
+    _auth: str = Depends(require_collector_key),
+) -> Dict[str, Any]:
+    """Individual predictions for one engine — signature, direction, result."""
+    sig_field = engine
+    dir_field = f"{engine}_dir"
+
+    pool = await get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT
+                  prediction_timestamp,
+                  pattern_signature::jsonb ->> %s AS sig,
+                  pattern_signature::jsonb ->> %s AS dir,
+                  price_at_prediction,
+                  o.actual_price,
+                  o.actual_direction,
+                  o.correct,
+                  confidence
+                FROM prediction_snapshots p
+                LEFT JOIN outcomes o ON o.prediction_id = p.id
+                WHERE pattern_signature LIKE '{%'
+                  AND pattern_signature::jsonb ? %s
+                  AND pattern_signature::jsonb ->> %s IN ('UP','DOWN')
+                ORDER BY prediction_timestamp DESC
+                LIMIT %s
+                """,
+                (sig_field, dir_field, dir_field, dir_field, limit),
+            )
+            rows = await cur.fetchall()
+
+    out = []
+    for r in rows:
+        out.append({
+            "prediction_timestamp": r[0].isoformat() if r[0] else None,
+            "signature": r[1],
+            "direction": r[2],
+            "price_at_prediction": float(r[3]) if r[3] is not None else None,
+            "actual_price": float(r[4]) if r[4] is not None else None,
+            "actual_direction": r[5],
+            "correct": r[6],
+            "confidence": float(r[7]) if r[7] is not None else None,
+        })
+    return {"engine": engine, "count": len(out), "signals": out}
