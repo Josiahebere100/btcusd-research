@@ -27,11 +27,11 @@
       font-family: inherit; font-size: 12px; letter-spacing: 0.4px;
     }
     .tab.on { background: #1b2a44; color: #cfe0ff; border-color: #2e4b7a; }
-    .wrap { padding: 20px; max-width: 1600px; margin: 0 auto; }
+    .wrap { padding: 20px; max-width: 1800px; margin: 0 auto; }
     table { width: 100%; border-collapse: collapse; }
     th, td {
       text-align: left; padding: 6px 10px; border-bottom: 1px solid #16161c;
-      font-size: 12px;
+      font-size: 12px; vertical-align: top;
     }
     th {
       color: #6f6f7a; font-weight: 500; text-transform: uppercase;
@@ -40,16 +40,26 @@
     }
     tr:hover td { background: #101015; }
     .sig {
-      font-size: 11px; color: #b0b0bb; max-width: 480px;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 11px; color: #b0b0bb; word-break: break-all;
+      max-width: 900px;
     }
     .num { font-variant-numeric: tabular-nums; text-align: right; }
-    .up { color: #7fffb0; }
-    .down { color: #ff9090; }
+    .up { color: #7fffb0; font-weight: 600; }
+    .down { color: #ff9090; font-weight: 600; }
     .correct { color: #7fffb0; }
     .incorrect { color: #ff9090; }
     .pending { color: #8a8a95; }
     .hint { color: #4a4a55; font-size: 11px; padding: 8px 0; }
+    .selector {
+      margin: 12px 0; display: flex; align-items: center; gap: 8px;
+    }
+    select, button.act {
+      background: #14141a; color: #d7d7dd;
+      border: 1px solid #26262e; padding: 6px 10px;
+      font-family: inherit; font-size: 12px; border-radius: 3px;
+      cursor: pointer;
+    }
+    button.act { background: #1b2a44; color: #cfe0ff; border-color: #2e4b7a; }
   </style>
 </head>
 <body>
@@ -57,24 +67,23 @@
     <div>
       <span class="title">MEMORY</span>
       <span class="dot">·</span>
-      <span class="sub">patterns · combinations · engine stats</span>
+      <span class="sub">patterns · combinations · engine stats · by engine</span>
     </div>
     <div class="sub" id="updated">—</div>
   </div>
 
-    <div class="tabs">
+  <div class="tabs">
     <button class="tab on" data-tab="patterns">PATTERNS</button>
     <button class="tab" data-tab="combinations">COMBINATIONS</button>
     <button class="tab" data-tab="engines">ENGINE STATS</button>
     <button class="tab" data-tab="by-engine">BY ENGINE</button>
   </div>
 
-    <div class="wrap">
+  <div class="wrap">
     <div id="hint" class="hint"></div>
-    <div id="engine-selector" style="display:none; margin: 12px 0;">
-      <label style="color:#8a8a95; font-size:12px; margin-right:8px;">Engine:</label>
-      <select id="engine-picker" style="background:#14141a; color:#d7d7dd;
-        border:1px solid #26262e; padding:6px 10px; font-family:inherit; font-size:12px;">
+    <div id="engine-selector" class="selector" style="display:none;">
+      <label style="color:#8a8a95; font-size:12px;">Engine:</label>
+      <select id="engine-picker">
         <option value="crt">crt</option>
         <option value="labouchere">labouchere</option>
         <option value="trig_euler">trig_euler</option>
@@ -84,11 +93,12 @@
         <option value="candlestick">candlestick</option>
         <option value="meta_ensemble">meta_ensemble</option>
       </select>
-      <button id="engine-refresh" style="background:#1b2a44; color:#cfe0ff;
-        border:1px solid #2e4b7a; padding:6px 12px; font-family:inherit;
-        font-size:12px; margin-left:8px; cursor:pointer; border-radius:3px;">
-        refresh
-      </button>
+      <label style="color:#8a8a95; font-size:12px; margin-left:12px;">Show:</label>
+      <select id="mode-picker">
+        <option value="fired">only fired</option>
+        <option value="all">all observations</option>
+      </select>
+      <button class="act" id="engine-refresh">refresh</button>
     </div>
     <div id="table-wrap"></div>
   </div>
@@ -134,23 +144,26 @@ function esc(s) {
 
 async function loadTab() {
   const hints = {
-    patterns: "Signatures learned by the base engines. Prefix identifies engine (crt:, lab:, trig:, ent:, sf:, ns:, cs:).",
-    combinations: "Full combos across all engines. 'combination' column is the pipe-joined state.",
+    patterns: "Signatures learned by each engine. Prefix identifies engine (crt:, lab:, trig:, ent:, sf:, ns:, cs:).",
+    combinations: "Full supersignatures across all engines. Pipe-joined state.",
     engines: "Per-engine directional calls and outcomes over the window.",
-    "by-engine": "Aggregate stats and recent signals for a single engine.",
+    "by-engine": "Full supersignatures where one engine contributed. Dir is the combined direction; Signature is the full JSON.",
   };
   document.getElementById("hint").textContent = hints[currentTab] || "";
 
   const engine = (document.getElementById("engine-picker") || {}).value || "crt";
+  const mode = (document.getElementById("mode-picker") || {}).value || "fired";
+  const onlyFired = mode === "fired";
 
   const endpoints = {
     patterns: "/api/memory/patterns?limit=300&min_occurrences=1",
     combinations: "/api/memory/combinations?limit=300&min_occurrences=1",
     engines: "/api/memory/engine-stats?hours=168",
-    "by-engine": "/api/memory/by-engine-signatures?engine=" + encodeURIComponent(engine) + "&hours=168&limit=200",
+    "by-engine": "/api/memory/by-engine?engine=" + encodeURIComponent(engine)
+      + "&hours=168&limit=300&only_fired=" + (onlyFired ? "true" : "false"),
   };
 
-    try {
+  try {
     const res = await fetch(endpoints[currentTab], {
       headers: { authorization: "Bearer " + apiKey }
     });
@@ -165,12 +178,12 @@ async function loadTab() {
       data = JSON.parse(text);
     } catch (parseErr) {
       document.getElementById("table-wrap").innerHTML =
-        "<div style='color:#ff9090'>HTTP " + res.status +
-        ": " + esc(text.slice(0, 300)) + "</div>";
+        "<div style='color:#ff9090'>HTTP " + res.status + ": " +
+        esc(text.slice(0, 300)) + "</div>";
       return;
     }
     if (currentTab === "by-engine") {
-      renderByEngine(data, engine);
+      renderByEngine(data);
     } else {
       render(data);
     }
@@ -182,31 +195,6 @@ async function loadTab() {
   }
 }
 
-function renderByEngine(data, engine) {
-  const wrap = document.getElementById("table-wrap");
-  const rows = data.signatures || [];
-  let html = "<table><thead><tr>" +
-    "<th>Signature</th><th>Dir</th><th class='num'>Occ</th>" +
-    "<th class='num'>Corr</th><th class='num'>Incorr</th><th class='num'>Acc</th>" +
-    "</tr></thead><tbody>";
-  for (const s of rows) {
-    const accCls = s.accuracy == null ? "" :
-      s.accuracy >= 0.55 ? "correct" :
-      s.accuracy <= 0.45 ? "incorrect" : "";
-    const dirCls = s.direction === "UP" ? "up" : "down";
-    html += "<tr>" +
-      "<td class='sig' title='" + esc(s.signature) + "'>" + esc(s.signature) + "</td>" +
-      "<td class='" + dirCls + "'>" + esc(s.direction) + "</td>" +
-      "<td class='num'>" + s.occurrences + "</td>" +
-      "<td class='num correct'>" + s.correct + "</td>" +
-      "<td class='num incorrect'>" + s.incorrect + "</td>" +
-      "<td class='num " + accCls + "'>" + fmtPct(s.accuracy) + "</td>" +
-      "</tr>";
-  }
-  html += "</tbody></table>";
-  wrap.innerHTML = html;
-}
-
 function render(data) {
   const wrap = document.getElementById("table-wrap");
   if (currentTab === "patterns") {
@@ -214,7 +202,7 @@ function render(data) {
     let html = "<table><thead><tr>" +
       "<th>Signature</th><th class='num'>Occ</th><th class='num'>Corr</th>" +
       "<th class='num'>Incorr</th><th class='num'>Acc</th>" +
-      "<th class='num'>Recent</th><th>Last seen</th>" +
+      "<th class='num'>Recent</th><th class='num'>Last seen</th>" +
       "</tr></thead><tbody>";
     for (const p of rows) {
       const accCls = p.accuracy == null ? "" :
@@ -238,7 +226,7 @@ function render(data) {
   } else if (currentTab === "combinations") {
     const rows = data.combinations || [];
     let html = "<table><thead><tr>" +
-      "<th>Combination</th><th class='num'>Occ</th><th class='num'>Corr</th>" +
+      "<th>Supersignature</th><th class='num'>Occ</th><th class='num'>Corr</th>" +
       "<th class='num'>Incorr</th><th class='num'>Acc</th>" +
       "<th class='num'>Recent</th><th>Output</th>" +
       "</tr></thead><tbody>";
@@ -290,15 +278,49 @@ function render(data) {
   }
 }
 
+function renderByEngine(data) {
+  const wrap = document.getElementById("table-wrap");
+  const rows = data.signals || [];
+  if (rows.length === 0) {
+    wrap.innerHTML = "<div class='hint'>No rows in this window. " +
+      "If 'only fired' is selected, this engine hasn't made directional " +
+      "calls yet — switch to 'all observations' to see them anyway.</div>";
+    return;
+  }
+  let html = "<table><thead><tr>" +
+    "<th style='width:80px'>Time</th>" +
+    "<th style='width:70px'>Dir</th>" +
+    "<th style='width:100px'>Result</th>" +
+    "<th>Signature</th>" +
+    "</tr></thead><tbody>";
+  for (const s of rows) {
+    const dirCls = s.direction === "UP" ? "up" :
+      s.direction === "DOWN" ? "down" : "pending";
+    let result = "—";
+    let rCls = "pending";
+    if (s.correct === true) { result = "✓ correct"; rCls = "correct"; }
+    else if (s.correct === false) { result = "✗ incorrect"; rCls = "incorrect"; }
+    else if (s.direction === "NO_SIGNAL") { result = "no signal"; rCls = "pending"; }
+    else { result = "pending"; rCls = "pending"; }
+    html += "<tr>" +
+      "<td class='num'>" + fmtTime(s.at) + "</td>" +
+      "<td class='" + dirCls + "'>" + esc(s.direction) + "</td>" +
+      "<td class='" + rCls + "'>" + esc(result) + "</td>" +
+      "<td class='sig'>" + esc(s.signature) + "</td>" +
+      "</tr>";
+  }
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
 document.querySelectorAll(".tab").forEach(t => {
   t.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach(x => x.classList.remove("on"));
     t.classList.add("on");
     currentTab = t.dataset.tab;
     document.getElementById("engine-selector").style.display =
-      currentTab === "by-engine" ? "block" : "none";
+      currentTab === "by-engine" ? "flex" : "none";
     loadTab();
-    document.title = "Memory · " + currentTab;
   });
 });
 
