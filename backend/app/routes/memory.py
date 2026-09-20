@@ -153,31 +153,39 @@ async def by_engine_signatures(
     _auth: str = Depends(require_collector_key),
 ) -> Dict[str, Any]:
     """Aggregate stats for one engine's signatures within a time window."""
-    sig_field = engine
-    dir_field = f"{engine}_dir"
+    sig_key = engine
+    dir_key = f"{engine}_dir"
 
     pool = await get_pool()
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
+                WITH extracted AS (
+                  SELECT
+                    pattern_signature::jsonb ->> %s AS sig,
+                    pattern_signature::jsonb ->> %s AS sig_dir,
+                    o.correct AS correct
+                  FROM prediction_snapshots p
+                  LEFT JOIN outcomes o ON o.prediction_id = p.id
+                  WHERE pattern_signature LIKE '{%'
+                    AND pattern_signature::jsonb ? %s
+                    AND pattern_signature::jsonb ->> %s IN ('UP','DOWN')
+                    AND prediction_timestamp >= now() - (%s * interval '1 hour')
+                )
                 SELECT
-                  pattern_signature::jsonb ->> %s AS sig,
-                  pattern_signature::jsonb ->> %s AS dir,
+                  sig,
+                  sig_dir,
                   COUNT(*) AS n,
-                  COUNT(*) FILTER (WHERE o.correct = true) AS correct,
-                  COUNT(*) FILTER (WHERE o.correct = false) AS incorrect
-                FROM prediction_snapshots p
-                LEFT JOIN outcomes o ON o.prediction_id = p.id
-                WHERE pattern_signature LIKE '{%'
-                  AND pattern_signature::jsonb ? %s
-                  AND pattern_signature::jsonb ->> %s IN ('UP','DOWN')
-                  AND prediction_timestamp >= now() - (%s * interval '1 hour')
-                GROUP BY sig, dir
+                  COUNT(*) FILTER (WHERE correct = true) AS n_correct,
+                  COUNT(*) FILTER (WHERE correct = false) AS n_incorrect
+                FROM extracted
+                WHERE sig IS NOT NULL AND sig_dir IS NOT NULL
+                GROUP BY sig, sig_dir
                 ORDER BY n DESC
                 LIMIT %s
                 """,
-                (sig_field, dir_field, dir_field, dir_field, hours, limit),
+                (sig_key, dir_key, dir_key, dir_key, hours, limit),
             )
             rows = await cur.fetchall()
 
@@ -209,9 +217,9 @@ async def by_engine_recent(
     limit: int = Query(200, ge=1, le=2000),
     _auth: str = Depends(require_collector_key),
 ) -> Dict[str, Any]:
-    """Individual predictions for one engine — signature, direction, result."""
-    sig_field = engine
-    dir_field = f"{engine}_dir"
+    """Individual predictions for one engine."""
+    sig_key = engine
+    dir_key = f"{engine}_dir"
 
     pool = await get_pool()
     async with pool.connection() as conn:
@@ -221,7 +229,7 @@ async def by_engine_recent(
                 SELECT
                   prediction_timestamp,
                   pattern_signature::jsonb ->> %s AS sig,
-                  pattern_signature::jsonb ->> %s AS dir,
+                  pattern_signature::jsonb ->> %s AS sig_dir,
                   price_at_prediction,
                   o.actual_price,
                   o.actual_direction,
@@ -235,7 +243,7 @@ async def by_engine_recent(
                 ORDER BY prediction_timestamp DESC
                 LIMIT %s
                 """,
-                (sig_field, dir_field, dir_field, dir_field, limit),
+                (sig_key, dir_key, dir_key, dir_key, limit),
             )
             rows = await cur.fetchall()
 
