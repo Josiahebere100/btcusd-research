@@ -168,8 +168,8 @@ async def by_engine_signatures(
                     o.correct AS correct
                   FROM prediction_snapshots p
                   LEFT JOIN outcomes o ON o.prediction_id = p.id
-                  WHERE pattern_signature LIKE '{%'
-                    AND pattern_signature::jsonb ? %s
+                  WHERE LEFT(pattern_signature, 1) = '{'
+                    AND jsonb_exists(pattern_signature::jsonb, %s)
                     AND pattern_signature::jsonb ->> %s IN ('UP','DOWN')
                     AND prediction_timestamp >= now() - (%s * interval '1 hour')
                 )
@@ -237,8 +237,8 @@ async def by_engine_recent(
                   confidence
                 FROM prediction_snapshots p
                 LEFT JOIN outcomes o ON o.prediction_id = p.id
-                WHERE pattern_signature LIKE '{%'
-                  AND pattern_signature::jsonb ? %s
+                WHERE LEFT(pattern_signature, 1) = '{'
+                  AND jsonb_exists(pattern_signature::jsonb, %s)
                   AND pattern_signature::jsonb ->> %s IN ('UP','DOWN')
                 ORDER BY prediction_timestamp DESC
                 LIMIT %s
