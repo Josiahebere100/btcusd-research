@@ -62,14 +62,34 @@
     <div class="sub" id="updated">—</div>
   </div>
 
-  <div class="tabs">
+    <div class="tabs">
     <button class="tab on" data-tab="patterns">PATTERNS</button>
     <button class="tab" data-tab="combinations">COMBINATIONS</button>
     <button class="tab" data-tab="engines">ENGINE STATS</button>
+    <button class="tab" data-tab="by-engine">BY ENGINE</button>
   </div>
 
-  <div class="wrap">
+    <div class="wrap">
     <div id="hint" class="hint"></div>
+    <div id="engine-selector" style="display:none; margin: 12px 0;">
+      <label style="color:#8a8a95; font-size:12px; margin-right:8px;">Engine:</label>
+      <select id="engine-picker" style="background:#14141a; color:#d7d7dd;
+        border:1px solid #26262e; padding:6px 10px; font-family:inherit; font-size:12px;">
+        <option value="crt">crt</option>
+        <option value="labouchere">labouchere</option>
+        <option value="trig_euler">trig_euler</option>
+        <option value="entropy_regime">entropy_regime</option>
+        <option value="superformula">superformula</option>
+        <option value="navier_stokes">navier_stokes</option>
+        <option value="candlestick">candlestick</option>
+        <option value="meta_ensemble">meta_ensemble</option>
+      </select>
+      <button id="engine-refresh" style="background:#1b2a44; color:#cfe0ff;
+        border:1px solid #2e4b7a; padding:6px 12px; font-family:inherit;
+        font-size:12px; margin-left:8px; cursor:pointer; border-radius:3px;">
+        refresh
+      </button>
+    </div>
     <div id="table-wrap"></div>
   </div>
 
@@ -113,15 +133,21 @@ function esc(s) {
 }
 
 async function loadTab() {
-  document.getElementById("hint").textContent =
-    currentTab === "patterns" ? "Signatures learned by the base engines. Prefix identifies engine (crt:, lab:, trig:, ent:, sf:, ns:, cs:)."
-    : currentTab === "combinations" ? "Full combos across all engines. 'combination' column is the pipe-joined state."
-    : "Per-engine directional calls and outcomes over the window.";
+  const hints = {
+    patterns: "Signatures learned by the base engines. Prefix identifies engine (crt:, lab:, trig:, ent:, sf:, ns:, cs:).",
+    combinations: "Full combos across all engines. 'combination' column is the pipe-joined state.",
+    engines: "Per-engine directional calls and outcomes over the window.",
+    "by-engine": "Aggregate stats and recent signals for a single engine.",
+  };
+  document.getElementById("hint").textContent = hints[currentTab] || "";
+
+  const engine = (document.getElementById("engine-picker") || {}).value || "crt";
 
   const endpoints = {
     patterns: "/api/memory/patterns?limit=300&min_occurrences=1",
     combinations: "/api/memory/combinations?limit=300&min_occurrences=1",
     engines: "/api/memory/engine-stats?hours=168",
+    "by-engine": "/api/memory/by-engine-signatures?engine=" + encodeURIComponent(engine) + "&hours=168&limit=200",
   };
 
   try {
@@ -134,13 +160,42 @@ async function loadTab() {
       return;
     }
     const data = await res.json();
-    render(data);
+    if (currentTab === "by-engine") {
+      renderByEngine(data, engine);
+    } else {
+      render(data);
+    }
     document.getElementById("updated").textContent =
       "updated " + new Date().toTimeString().slice(0, 8);
   } catch (e) {
     document.getElementById("table-wrap").innerHTML =
       "<div style='color:#ff9090'>error: " + esc(e.message) + "</div>";
   }
+}
+
+function renderByEngine(data, engine) {
+  const wrap = document.getElementById("table-wrap");
+  const rows = data.signatures || [];
+  let html = "<table><thead><tr>" +
+    "<th>Signature</th><th>Dir</th><th class='num'>Occ</th>" +
+    "<th class='num'>Corr</th><th class='num'>Incorr</th><th class='num'>Acc</th>" +
+    "</tr></thead><tbody>";
+  for (const s of rows) {
+    const accCls = s.accuracy == null ? "" :
+      s.accuracy >= 0.55 ? "correct" :
+      s.accuracy <= 0.45 ? "incorrect" : "";
+    const dirCls = s.direction === "UP" ? "up" : "down";
+    html += "<tr>" +
+      "<td class='sig' title='" + esc(s.signature) + "'>" + esc(s.signature) + "</td>" +
+      "<td class='" + dirCls + "'>" + esc(s.direction) + "</td>" +
+      "<td class='num'>" + s.occurrences + "</td>" +
+      "<td class='num correct'>" + s.correct + "</td>" +
+      "<td class='num incorrect'>" + s.incorrect + "</td>" +
+      "<td class='num " + accCls + "'>" + fmtPct(s.accuracy) + "</td>" +
+      "</tr>";
+  }
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
 }
 
 function render(data) {
@@ -231,9 +286,13 @@ document.querySelectorAll(".tab").forEach(t => {
     document.querySelectorAll(".tab").forEach(x => x.classList.remove("on"));
     t.classList.add("on");
     currentTab = t.dataset.tab;
+    document.getElementById("engine-selector").style.display =
+      currentTab === "by-engine" ? "block" : "none";
     loadTab();
   });
 });
+
+document.getElementById("engine-refresh").addEventListener("click", () => loadTab());
 
 loadTab();
 setInterval(loadTab, POLL_MS);
