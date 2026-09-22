@@ -12,7 +12,7 @@ router = APIRouter()
 
 @router.get("/recent")
 async def recent_signals(
-    limit: int = Query(1000, ge=1, le=10000),
+    limit: int = Query(100, ge=1, le=500),
     hours: int = Query(24, ge=1, le=87600),
     _auth: str = Depends(require_collector_key),
 ) -> Dict[str, Any]:
@@ -101,17 +101,29 @@ async def recent_signals(
                     "accuracy": accuracy,
                 })
 
-                        known_engines = [
-                "entropy_regime", "labouchere", "superformula",
-                "trig_euler", "crt", "navier_stokes", "combination",
-                "candlestick", "momentum", "trail_tracer", "meta_ensemble",
+            known_engines = [
+                "crt",
+                "labouchere",
+                "trig_euler",
+                "entropy_regime",
+                "superformula",
+                "navier_stokes",
+                "candlestick",
+                "momentum",
+                "trail_tracer",
+                "meta_ensemble",
+                "combination",
             ]
             found = {e["engine"] for e in engine_stats}
             for k in known_engines:
                 if k not in found:
                     engine_stats.append({
-                        "engine": k, "total": 0, "correct": 0,
-                        "incorrect": 0, "pending": 0, "accuracy": None,
+                        "engine": k,
+                        "total": 0,
+                        "correct": 0,
+                        "incorrect": 0,
+                        "pending": 0,
+                        "accuracy": None,
                     })
 
     return {
