@@ -12,7 +12,7 @@ router = APIRouter()
 
 @router.get("/recent")
 async def recent_signals(
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(100, ge=1, le=5000),
     hours: int = Query(24, ge=1, le=87600),
     _auth: str = Depends(require_collector_key),
 ) -> Dict[str, Any]:
