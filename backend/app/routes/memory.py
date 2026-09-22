@@ -18,6 +18,8 @@ ENGINE_PREFIXES = {
     "navier_stokes": "ns:",
     "candlestick": "cs:",
     "meta_ensemble": "meta:",
+    "momentum": "mom:",
+    "trail_tracer": "trail:",
 }
 
 
