@@ -101,9 +101,10 @@ async def recent_signals(
                     "accuracy": accuracy,
                 })
 
-            known_engines = [
+                        known_engines = [
                 "entropy_regime", "labouchere", "superformula",
                 "trig_euler", "crt", "navier_stokes", "combination",
+                "candlestick", "momentum", "trail_tracer", "meta_ensemble",
             ]
             found = {e["engine"] for e in engine_stats}
             for k in known_engines:
