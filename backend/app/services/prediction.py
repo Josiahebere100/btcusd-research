@@ -15,8 +15,10 @@ from ..engines.candlestick import CandlestickEngine
 from ..engines.crt import CRTEngine
 from ..engines.entropy_regime import EntropyRegimeEngine
 from ..engines.labouchere import LabouchereEngine
+from ..engines.momentum import MomentumEngine
 from ..engines.navier_stokes import NavierStokesAutomatonEngine
 from ..engines.superformula import SuperformulaEngine
+from ..engines.trail_tracer import TrailTracerEngine
 from ..engines.trig_euler import TrigEulerEngine
 from .combination import combination_key, lookup_combination
 
@@ -29,6 +31,8 @@ _engines: List[Engine] = [
     SuperformulaEngine(),
     NavierStokesAutomatonEngine(),
     CandlestickEngine(),
+    MomentumEngine(),
+    TrailTracerEngine(),
 ]
 
 
@@ -124,7 +128,6 @@ async def create_prediction_for_round(
     )
     outputs = await _run_engines(ctx)
 
-    # Meta-ensemble runs after base engines and consumes their outputs.
     try:
         from .meta_ensemble import run_meta_ensemble
         meta_out = await run_meta_ensemble(outputs, ctx)
