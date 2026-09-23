@@ -113,6 +113,7 @@ async def recent_signals(
                 "trail_tracer",
                 "meta_ensemble",
                 "combination",
+                "curve_geometry",
             ]
             found = {e["engine"] for e in engine_stats}
             for k in known_engines:
