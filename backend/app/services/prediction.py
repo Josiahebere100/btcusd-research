@@ -20,6 +20,7 @@ from ..engines.navier_stokes import NavierStokesAutomatonEngine
 from ..engines.superformula import SuperformulaEngine
 from ..engines.trail_tracer import TrailTracerEngine
 from ..engines.trig_euler import TrigEulerEngine
+from ..engines.curve_geometry import CurveGeometryEngine
 from .combination import combination_key, lookup_combination
 
 
@@ -33,6 +34,7 @@ _engines: List[Engine] = [
     CandlestickEngine(),
     MomentumEngine(),
     TrailTracerEngine(),
+    CurveGeometryEngine(),
 ]
 
 
