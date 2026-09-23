@@ -20,6 +20,7 @@ ENGINE_PREFIXES = {
     "meta_ensemble": "meta:",
     "momentum": "mom:",
     "trail_tracer": "trail:",
+    "curve_geometry": "cg:",
 }
 
 
