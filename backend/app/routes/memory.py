@@ -21,6 +21,7 @@ ENGINE_PREFIXES = {
     "momentum": "mom:",
     "trail_tracer": "trail:",
     "curve_geometry": "cg:",
+    "ns_flow": "nsflow:",
 }
 
 
