@@ -13,18 +13,16 @@ from ..db import get_pool
 from ..engines.base import Engine, EngineContext, EngineOutput
 from ..engines.candlestick import CandlestickEngine
 from ..engines.crt import CRTEngine
+from ..engines.curve_geometry import CurveGeometryEngine
 from ..engines.entropy_regime import EntropyRegimeEngine
 from ..engines.labouchere import LabouchereEngine
 from ..engines.momentum import MomentumEngine
 from ..engines.navier_stokes import NavierStokesAutomatonEngine
+from ..engines.ns_flow import NSFlowEngine
 from ..engines.superformula import SuperformulaEngine
 from ..engines.trail_tracer import TrailTracerEngine
 from ..engines.trig_euler import TrigEulerEngine
-from ..engines.curve_geometry import CurveGeometryEngine
 from .combination import combination_key, lookup_combination
-from ..engines.ns_flow import NSFlowEngine
-# and in the _engines list:
-    NSFlowEngine(),
 
 
 _engines: List[Engine] = [
@@ -38,6 +36,7 @@ _engines: List[Engine] = [
     MomentumEngine(),
     TrailTracerEngine(),
     CurveGeometryEngine(),
+    NSFlowEngine(),
 ]
 
 
