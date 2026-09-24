@@ -38,6 +38,7 @@ _engines: List[Engine] = [
     TrailTracerEngine(),
     CurveGeometryEngine(),
     NSFlowEngine(),
+    EnsembleKalmanEngine(),
 ]
 
 
