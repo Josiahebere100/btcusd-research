@@ -22,6 +22,7 @@ from ..engines.ns_flow import NSFlowEngine
 from ..engines.superformula import SuperformulaEngine
 from ..engines.trail_tracer import TrailTracerEngine
 from ..engines.trig_euler import TrigEulerEngine
+from ..engines.ensemble_kalman import EnsembleKalmanEngine
 from .combination import combination_key, lookup_combination
 
 
