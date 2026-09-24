@@ -115,6 +115,7 @@ async def recent_signals(
                 "combination",
                 "curve_geometry",
                 "ns_flow",
+                "ensemble_kalman",
             ]
             found = {e["engine"] for e in engine_stats}
             for k in known_engines:
