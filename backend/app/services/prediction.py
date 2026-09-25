@@ -136,8 +136,8 @@ async def create_prediction_for_round(
 
     try:
         ek_out = await run_ensemble_kalman(outputs, ctx)
-        if ek_out is not None:
-            outputs = outputs + [ek_out]
+                if ek_out is not None:
+            outputs = [ek_out] + outputs
     except Exception as e:
         print(f"[ensemble_kalman] failed: {e}")
 
