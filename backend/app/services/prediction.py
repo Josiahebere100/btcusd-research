@@ -14,6 +14,7 @@ from ..engines.base import Engine, EngineContext, EngineOutput
 from ..engines.candlestick import CandlestickEngine
 from ..engines.crt import CRTEngine
 from ..engines.curve_geometry import CurveGeometryEngine
+from ..engines.ensemble_kalman import run_ensemble_kalman
 from ..engines.entropy_regime import EntropyRegimeEngine
 from ..engines.labouchere import LabouchereEngine
 from ..engines.momentum import MomentumEngine
@@ -22,7 +23,6 @@ from ..engines.ns_flow import NSFlowEngine
 from ..engines.superformula import SuperformulaEngine
 from ..engines.trail_tracer import TrailTracerEngine
 from ..engines.trig_euler import TrigEulerEngine
-from ..engines.ensemble_kalman import run_ensemble_kalman
 from .combination import combination_key, lookup_combination
 
 
@@ -131,7 +131,8 @@ async def create_prediction_for_round(
         current_price=current_price,
         recent_ticks=recent_ticks,
     )
-        outputs = await _run_engines(ctx)
+
+    outputs = await _run_engines(ctx)
 
     try:
         ek_out = await run_ensemble_kalman(outputs, ctx)
