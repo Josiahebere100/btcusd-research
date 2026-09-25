@@ -22,7 +22,9 @@ ACCURACY_WINDOW = 100
 MIN_SAMPLES = 30
 MIN_AGREE = 0.55
 MIN_WEIGHT = 0.05
-MIN_FIRING_ENGINES = 2
+MIN_FIRING_ENGINES = 1
+MIN_ENGINE_ACCURACY = 0.53
+SINGLE_ENGINE_CONF_CAP = 0.62
 BOLLINGER_K = 2.0
 HOLT_ALPHA = 0.3
 HOLT_BETA = 0.1
@@ -240,7 +242,7 @@ async def run_ensemble_kalman(
 
     up_frac = up_weight / total
 
-    if up_frac >= MIN_AGREE:
+        if up_frac >= MIN_AGREE:
         direction = "UP"
         selected_conf = up_frac
         agreeing = agreeing_up
@@ -260,6 +262,25 @@ async def run_ensemble_kalman(
                 "weights": weights,
             },
         )
+
+    # If only one engine is voting, cap confidence and require it to be strong.
+    if len(agreeing) == 1:
+        sole_engine = agreeing[0]
+        sole_acc = details.get(sole_engine, {}).get("current_acc", 0.0)
+        if sole_acc < MIN_ENGINE_ACCURACY:
+            return EngineOutput(
+                engine="ensemble_kalman",
+                direction="NO_SIGNAL",
+                confidence=None,
+                pattern_signature=None,
+                raw_state={
+                    "reason": "single engine below accuracy floor",
+                    "engine": sole_engine,
+                    "accuracy": sole_acc,
+                    "floor": MIN_ENGINE_ACCURACY,
+                },
+            )
+        selected_conf = min(selected_conf, SINGLE_ENGINE_CONF_CAP)
 
     bucket = int(selected_conf * 10)
     signature = f"ek:{direction.lower()}:{bucket}"
