@@ -152,6 +152,14 @@ async def create_prediction_for_round(
     direction, confidence, sig_json, primary_source, _comb_key = (
         await _pick_direction(outputs)
     )
+        try:
+        from ..engines.baselines import run_baselines
+        baseline_data = await run_baselines(ctx)
+        data = json.loads(sig_json)
+        data["baseline"] = baseline_data
+        sig_json = json.dumps(data)
+    except Exception as e:
+        print(f"[baselines] failed: {e}")
 
     pool = await get_pool()
     async with pool.connection() as conn:
