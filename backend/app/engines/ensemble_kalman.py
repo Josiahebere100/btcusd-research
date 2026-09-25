@@ -1,17 +1,15 @@
-"""Ensemble Kalman — post-engine weighted vote.
+"""Ensemble Kalman - post-engine weighted vote.
 
-Runs after all base engines have produced their outputs for the
-current round. Reads the base engines' CURRENT directions (not the
-previous round's), applies Kalman-smoothed weights derived from
-recent rolling accuracy, and produces a single weighted vote.
+Runs after all base engines have produced their outputs. Reads the
+CURRENT round's engine directions, applies Kalman-smoothed weights
+derived from recent rolling accuracy, and produces a single vote.
 
-Called from prediction.py as a post-engine pass, not as an engine in
-the _engines list.
+Called from prediction.py as a post-engine pass, not as an engine.
 """
 import json
 import math
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from ..db import get_pool
 from .base import EngineContext, EngineOutput
@@ -92,7 +90,7 @@ async def _load_recent_outcomes(limit):
 
 def _engine_history(outcomes, engine):
     hist = []
-    dir_key = f"{engine}_dir"
+    dir_key = engine + "_dir"
     for row in outcomes:
         try:
             sig = json.loads(row["sig"])
@@ -147,16 +145,11 @@ def _kalman_weight(hist):
     }
 
 
-async def run_ensemble_kalman(
-    base_outputs: List[EngineOutput],
-    ctx: EngineContext,
-) -> Optional[EngineOutput]:
-    """Post-engine pass. Reads current engine outputs, weighted vote."""
+async def run_ensemble_kalman(base_outputs, ctx):
     if EK_MODE != "active":
         return None
 
-    # Collect current directions from THIS round's outputs
-    current_dirs: Dict[str, str] = {}
+    current_dirs = {}
     for o in base_outputs:
         if o.engine in BASE_ENGINES and o.direction in ("UP", "DOWN"):
             current_dirs[o.engine] = o.direction
@@ -195,8 +188,8 @@ async def run_ensemble_kalman(
             raw_state={"reason": "no recent outcomes"},
         )
 
-    weights: Dict[str, float] = {}
-    details: Dict[str, Dict[str, Any]] = {}
+    weights = {}
+    details = {}
     for engine in current_dirs.keys():
         hist = _engine_history(outcomes, engine)
         w, meta = _kalman_weight(hist)
@@ -242,7 +235,7 @@ async def run_ensemble_kalman(
 
     up_frac = up_weight / total
 
-        if up_frac >= MIN_AGREE:
+    if up_frac >= MIN_AGREE:
         direction = "UP"
         selected_conf = up_frac
         agreeing = agreeing_up
@@ -263,7 +256,6 @@ async def run_ensemble_kalman(
             },
         )
 
-    # If only one engine is voting, cap confidence and require it to be strong.
     if len(agreeing) == 1:
         sole_engine = agreeing[0]
         sole_acc = details.get(sole_engine, {}).get("current_acc", 0.0)
@@ -280,10 +272,11 @@ async def run_ensemble_kalman(
                     "floor": MIN_ENGINE_ACCURACY,
                 },
             )
-        selected_conf = min(selected_conf, SINGLE_ENGINE_CONF_CAP)
+        if selected_conf > SINGLE_ENGINE_CONF_CAP:
+            selected_conf = SINGLE_ENGINE_CONF_CAP
 
     bucket = int(selected_conf * 10)
-    signature = f"ek:{direction.lower()}:{bucket}"
+    signature = "ek:" + direction.lower() + ":" + str(bucket)
 
     raw = {
         "up_weight": up_weight,
