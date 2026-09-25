@@ -121,6 +121,8 @@ async def evaluate_prediction(
     # Pattern memory per engine.
     engine_sigs, comb_key = _parse_signatures(sig_raw)
     for eng_name, sig in engine_sigs.items():
+        if eng_name.startswith("baseline_"):
+            continue
         try:
             await record_signature_outcome(
                 signature=sig,
