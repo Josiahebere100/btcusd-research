@@ -141,18 +141,11 @@ async def create_prediction_for_round(
     except Exception as e:
         print(f"[ensemble_kalman] failed: {e}")
 
-    #try:
-        #from .meta_ensemble import run_meta_ensemble
-        #meta_out = await run_meta_ensemble(outputs, ctx)
-        #if meta_out is not None:
-            #outputs = [meta_out] + outputs
-    #except Exception as e:
-        #print(f"[meta_ensemble] failed: {e}")
-
     direction, confidence, sig_json, primary_source, _comb_key = (
         await _pick_direction(outputs)
     )
-        try:
+
+    try:
         from ..engines.baselines import run_baselines
         baseline_data = await run_baselines(ctx)
         data = json.loads(sig_json)
