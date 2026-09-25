@@ -22,7 +22,7 @@ from ..engines.ns_flow import NSFlowEngine
 from ..engines.superformula import SuperformulaEngine
 from ..engines.trail_tracer import TrailTracerEngine
 from ..engines.trig_euler import TrigEulerEngine
-from ..engines.ensemble_kalman import EnsembleKalmanEngine
+from ..engines.ensemble_kalman import run_ensemble_kalman
 from .combination import combination_key, lookup_combination
 
 
@@ -38,7 +38,6 @@ _engines: List[Engine] = [
     TrailTracerEngine(),
     CurveGeometryEngine(),
     NSFlowEngine(),
-    EnsembleKalmanEngine(),
 ]
 
 
@@ -132,7 +131,14 @@ async def create_prediction_for_round(
         current_price=current_price,
         recent_ticks=recent_ticks,
     )
-    outputs = await _run_engines(ctx)
+        outputs = await _run_engines(ctx)
+
+    try:
+        ek_out = await run_ensemble_kalman(outputs, ctx)
+        if ek_out is not None:
+            outputs = outputs + [ek_out]
+    except Exception as e:
+        print(f"[ensemble_kalman] failed: {e}")
 
     try:
         from .meta_ensemble import run_meta_ensemble
