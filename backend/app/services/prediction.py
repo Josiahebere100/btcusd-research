@@ -20,11 +20,11 @@ from ..engines.labouchere import LabouchereEngine
 from ..engines.momentum import MomentumEngine
 from ..engines.navier_stokes import NavierStokesAutomatonEngine
 from ..engines.ns_flow import NSFlowEngine
+from ..engines.projectile import ProjectileEngine
 from ..engines.superformula import SuperformulaEngine
 from ..engines.trail_tracer import TrailTracerEngine
 from ..engines.trajectory import TrajectoryEngine
 from ..engines.trig_euler import TrigEulerEngine
-from ..engines.projectile import ProjectileEngine
 from .combination import combination_key, lookup_combination
 
 
@@ -150,7 +150,7 @@ async def create_prediction_for_round(
         await _pick_direction(outputs)
     )
 
-    # Baselines (read-only observers, added to JSON under "baseline")
+    # Baselines (read-only, stored under "baseline" key)
     try:
         from ..engines.baselines import run_baselines
         baseline_data = await run_baselines(ctx)
@@ -160,8 +160,8 @@ async def create_prediction_for_round(
     except Exception as e:
         print(f"[baselines] failed: {e}")
 
-    # Trajectory engine raw_state (for later per-model scoring)
-        try:
+    # Engine raw_state for later per-model scoring
+    try:
         data = json.loads(sig_json)
         for o in outputs:
             if o.engine == "trajectory" and o.raw_state:
