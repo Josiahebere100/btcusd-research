@@ -1,4 +1,15 @@
-"""Outcome evaluator + pattern memory + combination memory hooks."""
+"""Outcome evaluator + pattern memory + combination memory + per-model scoring.
+
+Called by prediction.py's _schedule_evaluation after the target time
+has passed. For each prediction:
+
+  1. Look up actual price at target time
+  2. Write outcome row
+  3. Update pattern memory per engine
+  4. Update combination memory
+  5. Score trajectory models (if this prediction used the trajectory engine)
+  6. Score projectile kinematic forecast (if this prediction used the projectile engine)
+"""
 import json
 import math
 from datetime import datetime
@@ -10,7 +21,12 @@ from .combination import record_combination_outcome
 from .pattern_memory import record_signature_outcome
 
 
+# ============================================================
+# Price lookup
+# ============================================================
+
 async def _price_at(conn, target: datetime) -> Optional[float]:
+    """Nearest tick price at or before target, else first tick after."""
     async with conn.cursor() as cur:
         await cur.execute(
             """
@@ -35,7 +51,12 @@ async def _price_at(conn, target: datetime) -> Optional[float]:
         return float(row[0]) if row else None
 
 
+# ============================================================
+# Signature parsing
+# ============================================================
+
 def _parse_signatures(raw: Optional[str]):
+    """Split pattern_signature JSON into (engine_sigs, combination_key)."""
     if not raw:
         return {}, None
     try:
@@ -48,10 +69,15 @@ def _parse_signatures(raw: Optional[str]):
         return {"crt": raw}, None
 
 
+# ============================================================
+# Main entry point
+# ============================================================
+
 async def evaluate_prediction(
     prediction_id: int,
     predicted_direction: str,
 ) -> None:
+    """Resolve a prediction's outcome and update all memory layers."""
     pool = await get_pool()
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
@@ -97,6 +123,7 @@ async def evaluate_prediction(
                 and actual_direction == pred_direction
             )
 
+            # Write outcome row (only for directional predictions)
             if pred_direction in ("UP", "DOWN"):
                 await cur.execute(
                     """
@@ -119,10 +146,17 @@ async def evaluate_prediction(
             )
         await conn.commit()
 
-    # Pattern memory per engine.
+    # ---- Pattern memory per engine -----------------------------------
+    # Baselines are excluded (they're read-only controls and should not
+    # pollute pattern memory). Nested objects like "baseline" are skipped
+    # because they aren't strings.
     engine_sigs, comb_key = _parse_signatures(sig_raw)
     for eng_name, sig in engine_sigs.items():
-        if eng_name.startswith("baseline_") or eng_name == "baseline":
+        if eng_name.startswith("baseline_"):
+            continue
+        if eng_name == "baseline":
+            continue
+        if eng_name.endswith("_state"):
             continue
         if not isinstance(sig, str):
             continue
@@ -138,7 +172,7 @@ async def evaluate_prediction(
         except Exception as e:
             print(f"[pattern_memory] failed sig={sig}: {e}")
 
-    # Combination memory
+    # ---- Combination memory ------------------------------------------
     if comb_key:
         try:
             await record_combination_outcome(
@@ -150,7 +184,7 @@ async def evaluate_prediction(
         except Exception as e:
             print(f"[combination_memory] failed key={comb_key}: {e}")
 
-    # Trajectory per-model scoring
+    # ---- Trajectory per-model scoring --------------------------------
     try:
         await _score_trajectory_models(
             prediction_id=pred_id,
@@ -161,6 +195,17 @@ async def evaluate_prediction(
     except Exception as e:
         print(f"[trajectory_score] failed: {e}")
 
+    # ---- Projectile kinematic scoring --------------------------------
+    try:
+        await _score_projectile(
+            prediction_id=pred_id,
+            sig_raw=sig_raw,
+            actual_direction=actual_direction,
+            target=target,
+        )
+    except Exception as e:
+        print(f"[projectile_score] failed: {e}")
+
     note_outcome_evaluated()
 
     print(
@@ -170,15 +215,20 @@ async def evaluate_prediction(
     )
 
 
+# ============================================================
+# Trajectory per-model scoring
+# ============================================================
+
 async def _score_trajectory_models(prediction_id, sig_raw, actual_direction, target):
-    """Score each hypothesis model against actual future ticks.
+    """Score each trajectory hypothesis model against actual future ticks.
 
     Produces two labels per model:
-      internal_direction_correct — 3-tick movement: sign(p_{t+3} - p_t)
+      internal_direction_correct — sign(p_{t+3} - p_t) using the
+                                    engine's stored current price
       target_direction_correct   — 15-second Up/Down outcome
 
-    Uses strictly-future ticks (tick_timestamp > prediction_timestamp),
-    scoped to BC.GAME BTC-USD.
+    Uses strictly-future ticks (> prediction_timestamp), scoped to
+    BC.GAME BTC-USD. Idempotent via ON CONFLICT.
     """
     if not sig_raw:
         return
@@ -260,6 +310,8 @@ async def _score_trajectory_models(prediction_id, sig_raw, actual_direction, tar
                 if len(fcast_values) != horizon:
                     continue
 
+                # Reconstruct price-space forecast:
+                #   normalized y -> price: p_hat = p0 + span_p * y_hat
                 forecast_prices = [float(p0) + float(span_p) * v for v in fcast_values]
 
                 endpoint_error = abs(forecast_prices[-1] - actual_prices[-1])
@@ -303,4 +355,109 @@ async def _score_trajectory_models(prediction_id, sig_raw, actual_direction, tar
                         weight,
                     ),
                 )
+        await conn.commit()
+
+
+# ============================================================
+# Projectile kinematic scoring
+# ============================================================
+
+async def _score_projectile(prediction_id, sig_raw, actual_direction, target):
+    """Score the projectile kinematic forecast against the actual tick
+    at the play-period cutoff.
+
+    Reuses trajectory_model_outcomes with model_name='projectile_kinematic'.
+    """
+    if not sig_raw:
+        return
+    try:
+        data = json.loads(sig_raw)
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+    pstate = data.get("projectile_state")
+    if not isinstance(pstate, dict):
+        return
+
+    coords = pstate.get("coordinates") or {}
+    p0 = coords.get("p0")
+    y_unit = coords.get("y_unit")
+    forecast = pstate.get("forecast") or {}
+    t_cutoff = forecast.get("t_cutoff_s")
+    y_forecast = forecast.get("y_forecast")
+    kin_dir = forecast.get("direction")
+
+    if None in (p0, y_unit, t_cutoff, y_forecast):
+        return
+
+    predicted_price = float(p0) + float(y_forecast) * float(y_unit)
+
+    pool = await get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT prediction_timestamp FROM prediction_snapshots WHERE id = %s",
+                (prediction_id,),
+            )
+            row = await cur.fetchone()
+    if not row:
+        return
+    pred_ts = row[0]
+
+    # Actual price at the end of the play period = first tick after
+    # prediction_timestamp is the closest we can get without a full
+    # play-period reconstruction here.
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT tick_timestamp, price
+                FROM market_ticks
+                WHERE source = 'BC.GAME'
+                  AND symbol = 'BTC-USD'
+                  AND tick_timestamp > %s
+                ORDER BY tick_timestamp ASC
+                LIMIT 1
+                """,
+                (pred_ts,),
+            )
+            future_row = await cur.fetchone()
+    if not future_row:
+        return
+    actual_at_horizon = float(future_row[1])
+
+    err = predicted_price - actual_at_horizon
+
+    correct = None
+    if kin_dir in ("UP", "DOWN") and actual_direction in ("UP", "DOWN"):
+        correct = (kin_dir == actual_direction)
+
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO trajectory_model_outcomes
+                  (prediction_id, model_name, horizon,
+                   forecast_values, actual_values,
+                   endpoint_error, trajectory_rms,
+                   internal_direction_correct,
+                   target_direction_correct,
+                   weight)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (prediction_id, model_name, horizon) DO NOTHING
+                """,
+                (
+                    prediction_id,
+                    "projectile_kinematic",
+                    1,
+                    json.dumps([predicted_price]),
+                    json.dumps([actual_at_horizon]),
+                    abs(err),
+                    abs(err),
+                    correct,
+                    correct,
+                    None,
+                ),
+            )
         await conn.commit()
