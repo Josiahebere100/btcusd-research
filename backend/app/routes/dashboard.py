@@ -7,7 +7,7 @@ Does not affect any engine.
 """
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends
 
@@ -17,7 +17,6 @@ from ..db import get_pool
 router = APIRouter()
 
 
-# Engines shown in the grid. Excludes baselines (controls, not voters).
 DASHBOARD_ENGINES = [
     "trig_euler",
     "trajectory",
@@ -62,7 +61,7 @@ async def live_dashboard(
             )
             pred = await cur.fetchone()
 
-            # 2. Round details for the latest prediction's round
+            # 2. Round details (only columns that exist in `rounds`)
             round_info = None
             if pred:
                 round_id = pred[1]
@@ -70,7 +69,7 @@ async def live_dashboard(
                     """
                     SELECT round_start_timestamp, trade_cutoff_timestamp,
                            price_start_timestamp, price_end_timestamp,
-                           status_code, win_side, start_price, end_price
+                           win_side, start_price, end_price
                     FROM rounds
                     WHERE round_id = %s
                     ORDER BY id DESC
@@ -85,10 +84,9 @@ async def live_dashboard(
                         "trade_cutoff": _iso(rr[1]),
                         "price_start": _iso(rr[2]),
                         "price_end": _iso(rr[3]),
-                        "status_code": rr[4],
-                        "win_side": rr[5],
-                        "start_price": float(rr[6]) if rr[6] is not None else None,
-                        "end_price": float(rr[7]) if rr[7] is not None else None,
+                        "win_side": rr[4],
+                        "start_price": float(rr[5]) if rr[5] is not None else None,
+                        "end_price": float(rr[6]) if rr[6] is not None else None,
                     }
 
             # 3. Latest tick
@@ -102,7 +100,7 @@ async def live_dashboard(
             )
             tick = await cur.fetchone()
 
-            # 4. Price history (last 60s) for the mini chart
+            # 4. Price history (last 60s)
             await cur.execute(
                 """
                 SELECT tick_timestamp, price
@@ -113,7 +111,7 @@ async def live_dashboard(
             )
             price_rows = await cur.fetchall()
 
-            # 5. Recent outcomes (last 20)
+            # 5. Recent outcomes
             await cur.execute(
                 """
                 SELECT p.prediction_timestamp, p.direction, p.engine,
@@ -126,7 +124,6 @@ async def live_dashboard(
             )
             outcome_rows = await cur.fetchall()
 
-    # ---- Parse engines from the latest prediction's JSON ----
     engines: List[Dict[str, Any]] = []
     if pred and pred[5]:
         try:
@@ -152,7 +149,6 @@ async def live_dashboard(
             "correct": r[4],
         })
 
-    # ---- Time math (client will use these to run its own countdown) ----
     trade_cutoff_iso = round_info["trade_cutoff"] if round_info else None
     price_end_iso = round_info["price_end"] if round_info else None
 
