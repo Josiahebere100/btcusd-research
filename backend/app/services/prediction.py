@@ -22,8 +22,8 @@ from ..engines.navier_stokes import NavierStokesAutomatonEngine
 from ..engines.ns_flow import NSFlowEngine
 from ..engines.superformula import SuperformulaEngine
 from ..engines.trail_tracer import TrailTracerEngine
-from ..engines.trig_euler import TrigEulerEngine
 from ..engines.trajectory import TrajectoryEngine
+from ..engines.trig_euler import TrigEulerEngine
 from .combination import combination_key, lookup_combination
 
 
@@ -136,6 +136,7 @@ async def create_prediction_for_round(
 
     outputs = await _run_engines(ctx)
 
+    # Ensemble Kalman post-pass
     try:
         ek_out = await run_ensemble_kalman(outputs, ctx)
         if ek_out is not None:
@@ -147,6 +148,7 @@ async def create_prediction_for_round(
         await _pick_direction(outputs)
     )
 
+    # Baselines (read-only observers, added to JSON under "baseline")
     try:
         from ..engines.baselines import run_baselines
         baseline_data = await run_baselines(ctx)
@@ -155,6 +157,17 @@ async def create_prediction_for_round(
         sig_json = json.dumps(data)
     except Exception as e:
         print(f"[baselines] failed: {e}")
+
+    # Trajectory engine raw_state (for later per-model scoring)
+    try:
+        data = json.loads(sig_json)
+        for o in outputs:
+            if o.engine == "trajectory" and o.raw_state:
+                data["trajectory_state"] = o.raw_state
+                break
+        sig_json = json.dumps(data)
+    except Exception as e:
+        print(f"[trajectory_state] failed: {e}")
 
     pool = await get_pool()
     async with pool.connection() as conn:
