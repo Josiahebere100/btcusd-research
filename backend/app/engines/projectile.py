@@ -58,7 +58,7 @@ DWELL_MAX_BACK = 10
 Y_UNIT_BPS = 10.0  # 10 bps of the starting price = 1 unit of y
 INF = float("inf")
 
-PROJECTILE_MODE = os.environ.get("PROJECTILE_MODE", "disabled").strip().lower()
+PROJECTILE_MODE = os.environ.get("PROJECTILE_MODE", "active").strip().lower()
 
 
 # ============================================================
