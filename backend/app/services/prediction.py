@@ -24,6 +24,7 @@ from ..engines.superformula import SuperformulaEngine
 from ..engines.trail_tracer import TrailTracerEngine
 from ..engines.trajectory import TrajectoryEngine
 from ..engines.trig_euler import TrigEulerEngine
+from ..engines.projectile import ProjectileEngine
 from .combination import combination_key, lookup_combination
 
 
@@ -40,6 +41,7 @@ _engines: List[Engine] = [
     CurveGeometryEngine(),
     NSFlowEngine(),
     TrajectoryEngine(),
+    ProjectileEngine(),
 ]
 
 
