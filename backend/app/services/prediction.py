@@ -161,15 +161,16 @@ async def create_prediction_for_round(
         print(f"[baselines] failed: {e}")
 
     # Trajectory engine raw_state (for later per-model scoring)
-    try:
+        try:
         data = json.loads(sig_json)
         for o in outputs:
             if o.engine == "trajectory" and o.raw_state:
                 data["trajectory_state"] = o.raw_state
-                break
+            if o.engine == "projectile" and o.raw_state:
+                data["projectile_state"] = o.raw_state
         sig_json = json.dumps(data)
     except Exception as e:
-        print(f"[trajectory_state] failed: {e}")
+        print(f"[engine_state] failed: {e}")
 
     pool = await get_pool()
     async with pool.connection() as conn:
