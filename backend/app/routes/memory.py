@@ -23,6 +23,7 @@ ENGINE_PREFIXES = {
     "curve_geometry": "cg:",
     "ns_flow": "nsflow:",
     "ensemble_kalman": "ek:",
+    "trajectory": "traj:",
 }
 
 
