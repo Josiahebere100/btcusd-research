@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live Dashboard · BTC/USD</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 0; background: #0a0a0c; color: #d7d7dd;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+    .topbar {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 20px; border-bottom: 1px solid #1a1a20; background: #0d0d10;
+    }
+    .title { color: #e8e8ee; font-weight: 600; letter-spacing: 0.5px; }
+    .dot { color: #4a4a55; margin: 0 8px; }
+    .sub { color: #6f6f7a; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      padding: 16px 20px;
+      max-width: 1600px; margin: 0 auto;
+    }
+    @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+    .panel {
+      background: #0d0d10;
+      border: 1px solid #1a1a20;
+      border-radius: 6px;
+      padding: 16px 18px;
+    }
+    .panel-title {
+      color: #6f6f7a; font-size: 10px; letter-spacing: 1.2px;
+      text-transform: uppercase; margin: 0 0 12px 0; font-weight: 500;
+    }
+    .countdown-row {
+      display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px;
+    }
+    .countdown-big {
+      font-size: 56px; font-weight: 700; letter-spacing: -2px;
+      color: #7fffb0; line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+    .countdown-big.warning { color: #ffcf8f; }
+    .countdown-big.danger { color: #ff9090; }
+    .countdown-big.locked { color: #8a8a95; }
+    .countdown-label { color: #6f6f7a; font-size: 12px; }
+    .round-id {
+      color: #8a8a95; font-size: 11px; margin-bottom: 12px;
+    }
+    .price-row {
+      display: flex; align-items: baseline; gap: 12px; margin-top: 16px;
+    }
+    .price-big {
+      font-size: 32px; font-weight: 600; color: #e8e8ee;
+      font-variant-numeric: tabular-nums;
+    }
+    .price-change { font-size: 14px; }
+    .price-change.up { color: #7fffb0; }
+    .price-change.down { color: #ff9090; }
+    .price-change.flat { color: #8a8a95; }
+    .meta-line {
+      color: #6f6f7a; font-size: 11px; margin-top: 4px;
+    }
+    .locked-banner {
+      margin-top: 16px; padding: 10px 14px; border-radius: 4px;
+      background: #14141a; border-left: 3px solid #2e4b7a;
+    }
+    .locked-banner .dir {
+      font-weight: 700; font-size: 18px; letter-spacing: 1px;
+    }
+    .locked-banner .dir.up { color: #7fffb0; }
+    .locked-banner .dir.down { color: #ff9090; }
+    .locked-banner .dir.none { color: #8a8a95; }
+    canvas { width: 100%; height: 140px; display: block; }
+    .engine-grid { width: 100%; border-collapse: collapse; }
+    .engine-grid th {
+      text-align: left; color: #6f6f7a; font-size: 10px;
+      letter-spacing: 1px; text-transform: uppercase; padding: 4px 8px;
+      border-bottom: 1px solid #1a1a20; font-weight: 500;
+    }
+    .engine-grid td {
+      padding: 7px 8px; border-bottom: 1px solid #14141a;
+      font-size: 12px; vertical-align: top;
+    }
+    .engine-grid tr:hover td { background: #101015; }
+    .dir-cell { font-weight: 600; }
+    .dir-up { color: #7fffb0; }
+    .dir-down { color: #ff9090; }
+    .dir-none { color: #4a4a55; }
+    .sig-cell {
+      color: #6f6f7a; font-size: 11px;
+      max-width: 340px; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap;
+    }
+    .outcome-row {
+      display: flex; gap: 4px; flex-wrap: wrap;
+    }
+    .chip {
+      width: 24px; height: 24px; border-radius: 3px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 600;
+    }
+    .chip.correct { background: #0f2a1a; color: #7fffb0; }
+    .chip.incorrect { background: #2a0f0f; color: #ff9090; }
+    .chip.pending { background: #14141a; color: #4a4a55; }
+    .chip.up { background: #0f2a1a; color: #7fffb0; }
+    .chip.down { background: #2a0f0f; color: #ff9090; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 3px;
+      font-size: 10px; letter-spacing: 0.5px;
+    }
+    .badge.ok { background: #0f2a1a; color: #7fffb0; }
+    .badge.warn { background: #2a2410; color: #ffcf8f; }
+    .badge.err { background: #2a0f0f; color: #ff9090; }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <div>
+    <span class="title">LIVE DASHBOARD</span>
+    <span class="dot">·</span>
+    <span class="sub">BTC/USD · BC.GAME</span>
+  </div>
+  <div class="sub" id="status"></div>
+</div>
+
+<div class="grid">
+
+  <!-- LEFT: current round + price -->
+  <div class="panel">
+    <div class="panel-title">Current round</div>
+    <div class="round-id" id="round-id">—</div>
+
+    <div class="countdown-row">
+      <div class="countdown-big" id="countdown">--</div>
+      <div class="countdown-label" id="countdown-label">seconds to trade cutoff</div>
+    </div>
+
+    <div class="price-row">
+      <div class="price-big" id="price">—</div>
+      <div class="price-change flat" id="price-change">—</div>
+    </div>
+    <div class="meta-line" id="price-meta">—</div>
+
+    <div class="locked-banner" id="locked-banner" style="display:none;">
+      <div style="color:#6f6f7a;font-size:10px;letter-spacing:1px;">LOCKED PREDICTION</div>
+      <div class="dir none" id="locked-dir">—</div>
+      <div style="color:#8a8a95;font-size:11px;margin-top:2px;" id="locked-meta">—</div>
+    </div>
+
+    <div style="margin-top:16px;">
+      <div class="panel-title">Last 60s</div>
+      <canvas id="price-chart"></canvas>
+    </div>
+  </div>
+
+  <!-- RIGHT: recent outcomes + engines -->
+  <div class="panel">
+    <div class="panel-title">Recent outcomes</div>
+    <div class="outcome-row" id="outcome-chips"></div>
+
+    <div style="margin-top:24px;">
+      <div class="panel-title">Current round · engine directions</div>
+      <table class="engine-grid">
+        <thead>
+          <tr>
+            <th style="width:140px;">Engine</th>
+            <th style="width:90px;">Direction</th>
+            <th>Signature</th>
+          </tr>
+        </thead>
+        <tbody id="engine-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API_KEY_STORAGE = "btcusd_dashboard_key";
+const POLL_MS = 2000;
+let apiKey = getKey();
+let lastData = null;
+let lastFetchAt = 0;
+
+function getKey() {
+  const url = new URL(location.href);
+  const k = url.searchParams.get("key");
+  if (k) {
+    sessionStorage.setItem(API_KEY_STORAGE, k);
+    url.searchParams.delete("key");
+    history.replaceState({}, "", url.toString());
+    return k;
+  }
+  let s = sessionStorage.getItem(API_KEY_STORAGE);
+  if (!s) {
+    s = window.prompt("Enter your COLLECTOR_API_KEY:");
+    if (s) sessionStorage.setItem(API_KEY_STORAGE, s.trim());
+  }
+  return (s || "").trim();
+}
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  return iso.slice(11, 19);
+}
+
+function fmtPrice(p) {
+  if (p === null || p === undefined) return "—";
+  return Number(p).toFixed(2);
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  })[c]);
+}
+
+async function poll() {
+  if (!apiKey) { apiKey = getKey(); if (!apiKey) return; }
+  try {
+    const res = await fetch("/api/dashboard/live", {
+      headers: { authorization: "Bearer " + apiKey }
+    });
+    if (res.status === 401) {
+      sessionStorage.removeItem(API_KEY_STORAGE);
+      apiKey = "";
+      document.getElementById("status").textContent = "invalid API key";
+      return;
+    }
+    if (res.ok) {
+      lastData = await res.json();
+      lastFetchAt = Date.now();
+      render();
+    }
+  } catch (e) {
+    document.getElementById("status").textContent = "error: " + e.message;
+  }
+}
+
+function render() {
+  if (!lastData) return;
+
+  document.getElementById("status").textContent =
+    "updated " + new Date().toTimeString().slice(0, 8);
+
+  // Round id
+  const rid = lastData.round ? lastData.round.round_id : null;
+  document.getElementById("round-id").textContent = rid ? ("round " + rid) : "no active round";
+
+  // Price
+  const price = lastData.current_price;
+  document.getElementById("price").textContent = fmtPrice(price) + " USD";
+
+  // Price change vs. first of price_history
+  const hist = lastData.price_history || [];
+  if (hist.length >= 2 && price !== null) {
+    const first = hist[0].p;
+    const change = price - first;
+    const pct = (change / first) * 100;
+    const el = document.getElementById("price-change");
+    el.textContent = (change >= 0 ? "▲ +" : "▼ ") + pct.toFixed(4) + "%";
+    el.className = "price-change " + (change > 0 ? "up" : change < 0 ? "down" : "flat");
+  } else {
+    document.getElementById("price-change").textContent = "—";
+  }
+
+  const tickAge = lastData.current_tick_at ?
+    Math.round((Date.now() - new Date(lastData.current_tick_at).getTime())) : null;
+  document.getElementById("price-meta").textContent =
+    "tick at " + fmtTime(lastData.current_tick_at) +
+    (tickAge !== null ? " · " + tickAge + "ms ago" : "");
+
+  // Locked prediction banner
+  const pred = lastData.prediction;
+  const banner = document.getElementById("locked-banner");
+  if (pred && pred.direction && pred.direction !== "NO_SIGNAL") {
+    banner.style.display = "block";
+    const dir = pred.direction;
+    const dirEl = document.getElementById("locked-dir");
+    dirEl.textContent = dir;
+    dirEl.className = "dir " + (dir === "UP" ? "up" : dir === "DOWN" ? "down" : "none");
+    document.getElementById("locked-meta").textContent =
+      pred.engine + " · target " + fmtTime(pred.target_timestamp) +
+      (pred.confidence !== null ? " · conf " + (pred.confidence * 100).toFixed(1) + "%" : "");
+  } else {
+    banner.style.display = "block";
+    document.getElementById("locked-dir").textContent = "NO_SIGNAL";
+    document.getElementById("locked-dir").className = "dir none";
+    document.getElementById("locked-meta").textContent =
+      pred ? "primary: " + pred.engine : "no prediction yet";
+  }
+
+  // Recent outcomes chips
+  const chips = document.getElementById("outcome-chips");
+  chips.innerHTML = "";
+  for (const o of lastData.recent_outcomes || []) {
+    const chip = document.createElement("div");
+    if (o.correct === true) { chip.className = "chip correct"; chip.textContent = "✓"; }
+    else if (o.correct === false) { chip.className = "chip incorrect"; chip.textContent = "✗"; }
+    else { chip.className = "chip pending"; chip.textContent = "·"; }
+    chip.title = (o.time || "") + " · " + o.engine + " " + o.predicted + " → " + (o.actual || "?");
+    chips.appendChild(chip);
+  }
+
+  // Engine table
+  const tbody = document.getElementById("engine-tbody");
+  tbody.innerHTML = "";
+  const engines = lastData.engines || [];
+  const firing = engines.filter(e => e.is_firing).length;
+  for (const e of engines) {
+    const tr = document.createElement("tr");
+    const dirClass = e.direction === "UP" ? "dir-up" :
+                     e.direction === "DOWN" ? "dir-down" : "dir-none";
+    tr.innerHTML =
+      "<td>" + esc(e.name) + "</td>" +
+      "<td class='dir-cell " + dirClass + "'>" + esc(e.direction) + "</td>" +
+      "<td class='sig-cell' title='" + esc(e.signature || "") + "'>" +
+        esc(e.signature || "—") + "</td>";
+    tbody.appendChild(tr);
+  }
+
+  // Chart
+  drawChart(hist);
+}
+
+function drawChart(history) {
+  const canvas = document.getElementById("price-chart");
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  if (!history || history.length < 2) {
+    ctx.fillStyle = "#4a4a55";
+    ctx.font = "11px monospace";
+    ctx.fillText("waiting for price history…", 12, 24);
+    return;
+  }
+
+  const t0 = new Date(history[0].t).getTime();
+  const t1 = new Date(history[history.length - 1].t).getTime();
+  const tSpan = Math.max(t1 - t0, 1);
+
+  let pMin = Infinity, pMax = -Infinity;
+  for (const p of history) {
+    if (p.p < pMin) pMin = p.p;
+    if (p.p > pMax) pMax = p.p;
+  }
+  const pPad = (pMax - pMin) * 0.1 || 1;
+  pMin -= pPad; pMax += pPad;
+  const pSpan = Math.max(pMax - pMin, 1);
+
+  const pad = { top: 6, right: 6, bottom: 6, left: 6 };
+
+  ctx.strokeStyle = "#14141a";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (h - pad.top - pad.bottom) * (i / 4);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(w - pad.right, y);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = "#4dd2c0";
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  for (let i = 0; i < history.length; i++) {
+    const t = new Date(history[i].t).getTime();
+    const x = pad.left + (w - pad.left - pad.right) * ((t - t0) / tSpan);
+    const y = pad.top + (h - pad.top - pad.bottom) * (1 - (history[i].p - pMin) / pSpan);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+// Countdown runs locally between polls using server timestamps
+function tickCountdown() {
+  if (!lastData) return;
+  const el = document.getElementById("countdown");
+  const lbl = document.getElementById("countdown-label");
+
+  const secondsToCutoff = lastData.seconds_to_cutoff;
+  const secondsToPriceEnd = lastData.seconds_to_price_end;
+  if (secondsToCutoff === null || secondsToCutoff === undefined) {
+    el.textContent = "--";
+    el.className = "countdown-big locked";
+    lbl.textContent = "no round timing available";
+    return;
+  }
+
+  // Server gave us the cutoff time N seconds from server "now".
+  // We fetched it at lastFetchAt. So real seconds remaining:
+  const elapsed = (Date.now() - lastFetchAt) / 1000;
+  const remaining = secondsToCutoff - elapsed;
+
+  if (remaining > 0) {
+    el.textContent = Math.ceil(remaining).toString().padStart(2, "0");
+    el.className = "countdown-big" +
+      (remaining < 3 ? " danger" : remaining < 8 ? " warning" : "");
+    lbl.textContent = "seconds to trade cutoff";
+  } else if (secondsToPriceEnd !== null && secondsToPriceEnd !== undefined) {
+    const remainPrice = secondsToPriceEnd - elapsed;
+    if (remainPrice > 0) {
+      el.textContent = Math.ceil(remainPrice).toString().padStart(2, "0");
+      el.className = "countdown-big locked";
+      lbl.textContent = "seconds to price window end · settling";
+    } else {
+      el.textContent = "LOCKED";
+      el.className = "countdown-big locked";
+      lbl.textContent = "waiting for next round…";
+    }
+  } else {
+    el.textContent = "LOCKED";
+    el.className = "countdown-big locked";
+    lbl.textContent = "waiting for next round…";
+  }
+}
+
+poll();
+setInterval(poll, POLL_MS);
+setInterval(tickCountdown, 250);
+</script>
+</body>
+</html>
