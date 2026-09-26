@@ -23,6 +23,7 @@ from ..engines.ns_flow import NSFlowEngine
 from ..engines.superformula import SuperformulaEngine
 from ..engines.trail_tracer import TrailTracerEngine
 from ..engines.trig_euler import TrigEulerEngine
+from ..engines.trajectory import TrajectoryEngine
 from .combination import combination_key, lookup_combination
 
 
@@ -38,6 +39,7 @@ _engines: List[Engine] = [
     TrailTracerEngine(),
     CurveGeometryEngine(),
     NSFlowEngine(),
+    TrajectoryEngine(),
 ]
 
 
