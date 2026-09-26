@@ -24,6 +24,7 @@ ENGINE_PREFIXES = {
     "ns_flow": "nsflow:",
     "ensemble_kalman": "ek:",
     "trajectory": "traj:",
+    "projectile": "proj:",
 }
 
 
