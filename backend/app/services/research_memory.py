@@ -339,26 +339,47 @@ class ResearchMemory:
                         obs_id = None
                         outcome = None
                         settled_round = current_round_id
-                        if current:
+                                                if current:
                             outcome = current[1]
-                            # Resolve ONLY the immediate previous round in this
-                            # session.  Never use the latest unresolved row as a
-                            # fallback: a collector gap must not turn t+2 into
-                            # the label for t.
+
+                            # First identify the actual immediately preceding
+                            # round in THIS session. We do not assume that
+                            # current_round_id - 1 exists, because collection
+                            # gaps can occur.
                             await cur.execute(
                                 """
-                                SELECT o.id, o.round_id
-                            FROM research_state_observations o
-                            WHERE o.session_id=%s
-                              AND o.next_outcome IS NULL
-                              AND o.round_id::numeric = (%s::numeric - 1)
-                            LIMIT 1
+                                SELECT r_prev.round_id
+                                FROM rounds r_prev
+                                WHERE r_prev.session_id = %s
+                                  AND r_prev.round_id::numeric < %s::numeric
+                                ORDER BY r_prev.round_id::numeric DESC
+                                LIMIT 1
                                 """,
                                 (session_id, current_round_id),
                             )
-                            obs = await cur.fetchone()
-                            if obs:
-                                obs_id = int(obs[0])
+                            previous_round = await cur.fetchone()
+
+                            if previous_round:
+                                previous_round_id = str(previous_round[0])
+
+                                # Only resolve the observation belonging to
+                                # THAT exact previous round. Never fall back
+                                # to an older unresolved observation.
+                                await cur.execute(
+                                    """
+                                    SELECT o.id
+                                    FROM research_state_observations o
+                                    WHERE o.session_id = %s
+                                      AND o.round_id = %s
+                                      AND o.next_outcome IS NULL
+                                    LIMIT 1
+                                    """,
+                                    (session_id, previous_round_id),
+                                )
+                                obs = await cur.fetchone()
+
+                                if obs:
+                                    obs_id = int(obs[0])
                     await conn.commit()
                 if obs_id is not None:
                     await self.record_resolved_observation(
