@@ -39,7 +39,7 @@ class FeedState:
     outcomes_evaluated: int = 0
 
     # Round tracking for prediction triggering
-    seen_round_ids: set = field(default_factory=set)
+    seen_round_ids: set = field(default_factory=set)  # (session_id, round_id) keys
 
     # Rolling tick history: (unix_seconds_float, price), oldest first
     recent_ticks: Deque[Tuple[float, float]] = field(
