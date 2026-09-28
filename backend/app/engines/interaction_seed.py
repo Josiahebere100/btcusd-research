@@ -165,10 +165,10 @@ def _eval_rule(rule_name: str, outputs: Sequence[EngineOutput]) -> bool:
     if rule_name == "r007":
         return tr_sig == "traj:ZIGZAG_lin_calm_dw0" and cs == "cs:marubozu_bull_hi_D_st0"
     if rule_name == "r008":
-    return (
-        ent == "ent:p3_r2_dU_dw0_v0"
-        and sf.get("exact") == "sf:m0_n1_1_n2_0_dD_dw0"
-    )
+        return (
+            ent == "ent:p3_r2_dU_dw0_v0"
+            and sf.get("exact") == "sf:m0_n1_1_n2_0_dD_dw0"
+        )
     if rule_name == "r009":
         return trail == "trail:nt6_pep_UD_t0_dw0" and cg == "cg:f3_s4_q3_dw1"
     if rule_name == "r010":
