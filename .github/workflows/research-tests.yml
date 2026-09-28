@@ -22,11 +22,15 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install backend dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
 
-      - name: Run research tests
+      - name: Install test runner
         run: |
-          python tests/test_research_engines.py
+          pip install pytest
+
+      - name: Run complete research test suite
+        run: |
+          pytest -q tests
