@@ -103,9 +103,10 @@ CREATE INDEX IF NOT EXISTS idx_research_predictions_session_round
 
 
 class ResearchMemory:
-    def __init__(self, min_support: int = 5, max_interaction_order: int = 4) -> None:
+    def __init__(self, min_support: int = 5, max_interaction_order: int = 4, max_candidates: int = 6000) -> None:
         self.min_support = min_support
         self.max_interaction_order = max_interaction_order
+        self.max_candidates = max(1, int(max_candidates))
 
     _schema_ready = False
     _schema_lock = asyncio.Lock()
@@ -225,7 +226,9 @@ class ResearchMemory:
         raw = await self._load_stats(keys)
         return [v for v in raw.values() if v["n"] >= self.min_support]
 
-    async def record_resolved_observation(self, observation_id: int, outcome: str) -> None:
+    async def record_resolved_observation(
+        self, observation_id: int, outcome: str, next_round_id: Optional[str] = None
+    ) -> None:
         if outcome not in {"UP", "DOWN"}:
             return
         pool = await get_pool()
@@ -251,20 +254,22 @@ class ResearchMemory:
                     atoms,
                     min_order=2,
                     max_order=self.max_interaction_order,
-                    max_candidates=6000,
+                    max_candidates=self.max_candidates,
                 )
-                now = "NOW()"
+                up_inc = 1 if outcome == "UP" else 0
+                dn_inc = 1 if outcome == "DOWN" else 0
+                rows = []
                 for combo in combos:
                     key = canonical_interaction_key(combo)
                     h = interaction_hash(key)
-                    up_inc = 1 if outcome == "UP" else 0
-                    dn_inc = 1 if outcome == "DOWN" else 0
-                    await cur.execute(
-                        f"""
+                    rows.append((h, key, up_inc, dn_inc))
+                if rows:
+                    await cur.executemany(
+                        """
                         INSERT INTO research_interaction_stats
                           (interaction_hash, interaction_key, observation_count,
                            up_count, down_count, first_seen, last_seen)
-                        VALUES (%s,%s::jsonb,1,%s,%s,{now},{now})
+                        VALUES (%s,%s::jsonb,1,%s,%s,NOW(),NOW())
                         ON CONFLICT (interaction_hash)
                         DO UPDATE SET
                           observation_count = research_interaction_stats.observation_count + 1,
@@ -272,17 +277,31 @@ class ResearchMemory:
                           down_count = research_interaction_stats.down_count + EXCLUDED.down_count,
                           last_seen = NOW()
                         """,
-                        (h, key, up_inc, dn_inc),
+                        rows,
                     )
 
                 await cur.execute(
                     """
                     UPDATE research_state_observations
-                    SET next_outcome=%s, resolved_at=NOW()
+                    SET next_round_id=%s, next_outcome=%s, resolved_at=NOW()
                     WHERE id=%s AND next_outcome IS NULL
                     """,
-                    (outcome, observation_id),
+                    (next_round_id, outcome, observation_id),
                 )
+
+                # Resolve every research prediction attached to this observed
+                # round.  This is separate from the legacy `outcomes` table.
+                if next_round_id is not None:
+                    await cur.execute(
+                        """
+                        UPDATE research_predictions
+                        SET next_round_id=%s, actual_next_outcome=%s, resolved_at=NOW()
+                        WHERE session_id=%s
+                          AND round_id=%s
+                          AND actual_next_outcome IS NULL
+                        """,
+                        (next_round_id, outcome, session_id, round_id),
+                    )
             await conn.commit()
 
     async def resolve_previous_round(
@@ -322,14 +341,18 @@ class ResearchMemory:
                         settled_round = current_round_id
                         if current:
                             outcome = current[1]
+                            # Resolve ONLY the immediate previous round in this
+                            # session.  Never use the latest unresolved row as a
+                            # fallback: a collector gap must not turn t+2 into
+                            # the label for t.
                             await cur.execute(
                                 """
-                                SELECT id, round_id FROM research_state_observations
-                                WHERE session_id=%s
-                                  AND round_id::numeric < %s::numeric
-                                  AND next_outcome IS NULL
-                                ORDER BY round_id::numeric DESC
-                                LIMIT 1
+                                SELECT o.id, o.round_id
+                            FROM research_state_observations o
+                            WHERE o.session_id=%s
+                              AND o.next_outcome IS NULL
+                              AND o.round_id::numeric = (%s::numeric - 1)
+                            LIMIT 1
                                 """,
                                 (session_id, current_round_id),
                             )
@@ -338,12 +361,14 @@ class ResearchMemory:
                                 obs_id = int(obs[0])
                     await conn.commit()
                 if obs_id is not None:
-                    await self.record_resolved_observation(obs_id, outcome)
+                    await self.record_resolved_observation(
+                        obs_id, outcome, next_round_id=current_round_id
+                    )
                     return
-                if current is None:
-                    await asyncio.sleep(poll_seconds)
-                    continue
-                return
+                # Keep polling until both the authoritative current outcome and
+                # the immediate predecessor observation are present.
+                await asyncio.sleep(poll_seconds)
+                continue
             except Exception:
                 # A research DB problem must never stop the live engine loop.
                 return
