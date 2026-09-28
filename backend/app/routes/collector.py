@@ -18,6 +18,7 @@ from ..models import (
     TickBatch,
 )
 from ..services.prediction import create_prediction_for_round
+from ..services.research_memory import ResearchMemory
 from ..state import (
     compute_feed_status,
     get_state,
@@ -32,6 +33,8 @@ from ..state import (
 )
 
 router = APIRouter()
+
+_research_memory = ResearchMemory()
 
 
 # ---- Helpers --------------------------------------------------------------
@@ -253,9 +256,21 @@ async def ingest_rounds(
                 note_round(r.model_dump())
                 upserted += 1
 
+                # --- Resolve research state for the previous round on EVERY round. ---
+                # This must not depend on whether a prediction is created for the
+                # current round; the thesis labels state(t) with outcome(t+1).
+                if (r.session_id, r.round_id) not in state.seen_round_ids:
+                    asyncio.create_task(
+                        _schedule_research_resolution(
+                            session_id=r.session_id,
+                            current_round_id=r.round_id,
+                            settle_at=price_end,
+                        )
+                    )
+
                 # --- Trigger prediction for a new round ---
-                if r.round_id not in state.seen_round_ids:
-                    state.seen_round_ids.add(r.round_id)
+                if (r.session_id, r.round_id) not in state.seen_round_ids:
+                    state.seen_round_ids.add((r.session_id, r.round_id))
                     # Cap set size to avoid unbounded growth.
                     if len(state.seen_round_ids) > 10_000:
                         state.seen_round_ids = set(
@@ -338,6 +353,32 @@ async def ingest_sessions(
         await conn.commit()
 
     return {"ok": True, "upserted": upserted}
+
+
+async def _schedule_research_resolution(
+    session_id: str,
+    current_round_id: str,
+    settle_at,
+) -> None:
+    """Resolve state(t-1) from authoritative outcome of every current round.
+
+    This is intentionally attached to round ingestion rather than prediction
+    creation: the thesis requires next-round labels even when the current
+    round has NO prediction. Session boundaries are enforced by ResearchMemory.
+    """
+    try:
+        from datetime import timedelta
+        now = datetime.now(timezone.utc)
+        if settle_at is not None:
+            delay = (settle_at - now).total_seconds() + 1.0
+            if delay > 0:
+                await asyncio.sleep(delay)
+        await _research_memory.resolve_previous_round(
+            session_id=session_id,
+            current_round_id=current_round_id,
+        )
+    except Exception as e:
+        print(f"[research_memory] resolution failed for round {current_round_id}: {e}")
 
 
 # ---- Prediction helper ---------------------------------------------------
