@@ -201,6 +201,53 @@ def extract_observed_state(outputs: Sequence[EngineOutput]) -> List[StateAtom]:
     return [unique[k] for k in sorted(unique)]
 
 
+
+def select_research_atoms(atoms_obj: Sequence[StateAtom], max_atoms: int = 28) -> List[str]:
+    """Select a deterministic, engine-diverse bounded research atom set.
+
+    The selector is shared by live prediction and offline replay so the
+    historical bootstrap uses the same contextual vocabulary that the live
+    miner sees. Exact signatures are retained even when their engine emitted
+    NO_SIGNAL; directional atoms are only UP/DOWN.
+    """
+    priority = {
+        "model": 100, "state": 95, "dw": 90, "a": 90, "b": 90, "c": 90,
+        "sum": 85, "repeated": 80, "rel": 90, "dir": 88, "pair": 88,
+        "form": 88, "dircode": 85, "m": 88, "v": 80, "p": 85,
+        "flow": 85, "f": 80, "q": 80, "h": 75, "r": 75, "s": 75,
+        "t": 70, "cx": 65, "tr": 65, "sg": 65, "n1": 70, "n2": 70,
+        "namespace": 20, "result": 20, "exact": 0,
+    }
+    by_engine: Dict[str, List[StateAtom]] = {}
+    for atom in atoms_obj:
+        by_engine.setdefault(atom.engine, []).append(atom)
+
+    selected: List[str] = []
+    for engine in sorted(by_engine):
+        sigs = [a for a in by_engine[engine] if a.kind == "exact_signature"]
+        if sigs:
+            selected.append(sigs[0].canonical)
+
+    for engine in sorted(by_engine):
+        dirs = [a for a in by_engine[engine] if a.kind == "direction"]
+        if dirs:
+            selected.append(dirs[0].canonical)
+
+    remaining = []
+    for engine in sorted(by_engine):
+        for atom in by_engine[engine]:
+            if atom.kind != "structural":
+                continue
+            field = atom.key.rsplit(".", 1)[-1]
+            remaining.append((priority.get(field, 10), engine, atom.canonical))
+    remaining.sort(key=lambda x: (-x[0], x[1], x[2]))
+    for _, _, canonical in remaining:
+        if canonical not in selected:
+            selected.append(canonical)
+        if len(selected) >= max_atoms:
+            break
+    return sorted(set(selected))[:max_atoms]
+
 def active_signature_engine_count(outputs: Sequence[EngineOutput]) -> int:
     engines = set()
     for o in outputs:
