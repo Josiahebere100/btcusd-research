@@ -26,7 +26,20 @@ class ResearchEnsemble(Engine):
     ) -> EngineOutput:
         sr = seed.raw_state or {}
         ar = adaptive.raw_state or {}
-        sp = sr.get("seed_probability_up")
+
+        seed_probability_up = sr.get("seed_probability_up")
+        seed_probability_down = sr.get("seed_probability_down")
+
+        # Normalize the seed's two-sided probability representation into the
+        # single p_up value used by the fusion calculation.
+        #
+        # A DOWN seed legitimately stores its probability as p_down. Convert
+        # that to the mathematically equivalent p_up = 1 - p_down instead of
+        # silently dropping the seed evidence from the ensemble.
+        sp = seed_probability_up
+        if sp is None and isinstance(seed_probability_down, (int, float)):
+            sp = 1.0 - float(seed_probability_down)
+
         ap = ar.get("p_up")
 
         # Preserve evidence rather than fabricating a value when one side is absent.
@@ -57,6 +70,7 @@ class ResearchEnsemble(Engine):
 
         confidence = max(p_up or 0.0, p_down or 0.0) if direction != "NO_SIGNAL" else None
         sig = f"research:{direction.lower()}:seed{'A' if agreement else 'C' if conflict else 'N'}"
+
         return EngineOutput(
             engine=self.name,
             direction=direction,
@@ -66,6 +80,7 @@ class ResearchEnsemble(Engine):
                 "seed_direction": seed.direction,
                 "adaptive_direction": adaptive.direction,
                 "seed_probability_up": sp,
+                "seed_probability_down": seed_probability_down,
                 "adaptive_probability_up": ap,
                 "probability_up": p_up,
                 "probability_down": p_down,
