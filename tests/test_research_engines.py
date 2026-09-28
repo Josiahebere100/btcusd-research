@@ -1,10 +1,19 @@
 import asyncio
 import json
 import sys
+import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "staging"))
+sys.path.insert(0, str(ROOT))
+
+# The research engine imports ResearchMemory at module load time. Inject a
+# minimal DB surface so this isolated test suite never needs real credentials.
+dbmod = types.ModuleType("backend.app.db")
+async def _no_db():
+    raise RuntimeError("test-only: no database")
+dbmod.get_pool = _no_db
+sys.modules.setdefault("backend.app.db", dbmod)
 
 from backend.app.engines.base import EngineContext, EngineOutput
 from backend.app.engines.interaction_features import extract_observed_state, canonical_state_json
@@ -55,6 +64,9 @@ def test_seed_context_rule_fires():
 
 
 class FakeMemory:
+    async def ensure_schema(self):
+        return None
+
     async def stats_for_atoms(self, atoms, max_candidates=6000):
         return [{
             "hash": "h1",
@@ -82,6 +94,34 @@ def test_adaptive_engine_uses_context_and_reversal():
     assert out.raw_state["sway_delta"] > 0
 
 
+def test_sway_negative_delta_means_continuation():
+    outs = [
+        make("trajectory", "UP", "traj:ZIGZAG_lin_calm_dw0"),
+        make("projectile", "DOWN", "proj:a1_c3_h0_dw0"),
+        make("candlestick", "NO_SIGNAL", "cs:doji_mid_U_st0"),
+    ]
+
+    class ContinuationMemory(FakeMemory):
+        async def stats_for_atoms(self, atoms, max_candidates=6000):
+            return [{
+                "hash": "h2",
+                "key": ["sig.trajectory=traj:ZIGZAG_lin_calm_dw0"],
+                "n": 100, "up": 80, "down": 20,
+            }]
+
+    ctx = EngineContext("s", "2", None, None, None, None, None, 0.0, [])
+    out = asyncio.run(InteractionSwayEngine(memory=ContinuationMemory(), min_support=5).evaluate(outs, ctx))
+    assert out.raw_state["sway_mode"] == "continuation"
+    assert out.raw_state["sway_direction"] == "UP"
+    assert out.raw_state["sway_delta"] < 0
+
+
+def test_exact_research_predecessor_guard_is_present():
+    source = (Path(__file__).resolve().parent.parent / "backend" / "app" / "services" / "research_memory.py").read_text()
+    assert "o.round_id::numeric = (%s::numeric - 1)" in source
+    assert "SELECT MAX(r.round_id::numeric)" not in source
+
+
 def test_ensemble_preserves_conflict():
     ctx = EngineContext("s", "1", None, None, None, None, None, 0.0, [])
     seed = EngineOutput("interaction_seed", "DOWN", .8, "seed:x", {"seed_probability_up": .2, "fired_rules": []})
@@ -97,3 +137,9 @@ if __name__ == "__main__":
     test_seed_context_rule_fires()
     test_ensemble_preserves_conflict()
     print("ALL TESTS PASSED")
+
+
+def test_collector_round_deduplication_is_session_aware():
+    source = (Path(__file__).resolve().parent.parent / "backend" / "app" / "routes" / "collector.py").read_text()
+    assert "(r.session_id, r.round_id) not in state.seen_round_ids" in source
+    assert "state.seen_round_ids.add((r.session_id, r.round_id))" in source
