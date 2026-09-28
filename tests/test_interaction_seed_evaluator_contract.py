@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+
 from backend.app.engines.interaction_features import parse_signature_features
 from backend.app.engines.interaction_seed import _eval_rule
 from backend.app.engines.base import EngineOutput
