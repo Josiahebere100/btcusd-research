@@ -102,7 +102,7 @@ def test_up_seed_probability_is_fused_normally():
     assert out.raw_state["seed_probability_up"] == 0.65
     assert out.raw_state["seed_probability_down"] is None
     assert abs(out.raw_state["probability_up"] - expected_p_up) < 1e-12
-    assert out.direction == "NO_SIGNAL"
+    assert out.direction == "UP"
 
 
 def test_down_seed_works_when_adaptive_has_no_probability():
