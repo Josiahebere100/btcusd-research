@@ -46,9 +46,17 @@ def _parse_namespace(signature: str) -> Tuple[str, str, List[str]]:
     return namespace, body, body.split("_")
 
 
-def _add_prefixed_fields(out: Dict[str, str], parts: Sequence[str], prefixes: Iterable[str]) -> None:
+def _add_prefixed_fields(
+    out: Dict[str, str],
+    parts: Sequence[str],
+    prefixes: Iterable[str],
+) -> None:
+    # Match longer prefixes before shorter prefixes.
+    # This prevents "dw0" from being interpreted as "d" + "w0".
+    ordered_prefixes = sorted(prefixes, key=len, reverse=True)
+
     for part in parts:
-        for prefix in prefixes:
+        for prefix in ordered_prefixes:
             if part.startswith(prefix) and len(part) > len(prefix):
                 out[prefix.rstrip("_")] = part[len(prefix):]
                 break
