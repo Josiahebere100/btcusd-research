@@ -225,26 +225,68 @@ def _contains_digit_token(signature: Optional[str], token: str) -> bool:
     return token in signature.split("_")
 
 
+def _parse_candlestick_signature(
+    signature: Optional[str],
+) -> Optional[Tuple[str, str, str]]:
+    """Return (candle_type, position, prev_dir) from a CS signature.
+
+    Current canonical form:
+        cs:{candle_type}_{position}_{prev_dir}_st{streak}
+
+    Candle types such as ``marubozu_bull`` and ``body_bear`` contain
+    underscores, so this must not be parsed with a fixed underscore index.
+    """
+
+    if not signature:
+        return None
+
+    match = re.fullmatch(
+        r"cs:(?P<candle_type>.+)_(?P<position>lo|mid|hi)_"
+        r"(?P<prev_dir>[UDF])_st\d+",
+        signature,
+    )
+
+    if not match:
+        return None
+
+    return (
+        match.group("candle_type"),
+        match.group("position"),
+        match.group("prev_dir"),
+    )
+
+
 def _candlestick_has_d_context(outputs: Sequence[EngineOutput]) -> bool:
-    sig = _sig(outputs, "candlestick") or ""
-    raw = _raw(outputs, "candlestick")
-    if raw:
-        for value in raw.values():
-            if isinstance(value, str) and value.upper() == "D":
-                return True
-    return "_D_" in sig or sig.endswith("_D_st0") or "_D_" in sig
+    parsed = _parse_candlestick_signature(
+        _sig(outputs, "candlestick")
+    )
+
+    if parsed is None:
+        return False
+
+    _, _, prev_dir = parsed
+    return prev_dir == "D"
 
 
 def _candlestick_mid(outputs: Sequence[EngineOutput]) -> bool:
-    sig = _sig(outputs, "candlestick") or ""
-    return "mid" in sig
+    parsed = _parse_candlestick_signature(
+        _sig(outputs, "candlestick")
+    )
+
+    if parsed is None:
+        return False
+
+    _, position, _ = parsed
+    return position == "mid"
 
 
 def _candlestick_body(outputs: Sequence[EngineOutput]) -> bool:
     sig = _sig(outputs, "candlestick") or ""
     raw = _raw(outputs, "candlestick")
+
     if "body" in sig:
         return True
+
     return any(
         isinstance(v, str) and v.lower() == "body"
         for v in raw.values()
@@ -490,9 +532,7 @@ class InteractionSeedEngine(Engine):
                 ),
             )
 
-        sig = (
-            f"seed:{direction.lower()}:rules{len(valid)}"
-        )
+        sig = f"seed:{direction.lower()}:rules{len(valid)}"
 
         return EngineOutput(
             engine=self.name,
