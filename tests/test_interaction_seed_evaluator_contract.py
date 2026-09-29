@@ -126,3 +126,115 @@ def test_seed_008_does_not_match_wrong_superformula_signature():
     ]
 
     assert _eval_rule("r008", outputs) is False
+
+
+def test_seed_001_uses_candlestick_d_state():
+    outputs = [
+        EngineOutput(
+            engine="trajectory",
+            direction="DOWN",
+            confidence=None,
+            pattern_signature="traj:ZIGZAG_lin_calm_dw0",
+            raw_state={},
+        ),
+        EngineOutput(
+            engine="candlestick",
+            direction="NO_SIGNAL",
+            confidence=None,
+            pattern_signature="cs:marubozu_bull_hi_D_st0",
+            raw_state={},
+        ),
+        EngineOutput(
+            engine="crt",
+            direction="NO_SIGNAL",
+            confidence=None,
+            pattern_signature="crt:1-2-4_dw0",
+            raw_state={},
+        ),
+        EngineOutput(
+            engine="trig_euler",
+            direction="NO_SIGNAL",
+            confidence=None,
+            pattern_signature="trig:rel5_cx1_tr1_dir2_sg0_dw0",
+            raw_state={},
+        ),
+    ]
+
+    assert _eval_rule("r001", outputs) is True
+
+
+def test_seed_001_rejects_d_in_wrong_candlestick_position():
+    outputs = [
+        EngineOutput(
+            engine="trajectory",
+            direction="DOWN",
+            confidence=None,
+            pattern_signature="traj:ZIGZAG_lin_calm_dw0",
+            raw_state={},
+        ),
+        EngineOutput(
+            engine="candlestick",
+            direction="NO_SIGNAL",
+            confidence=None,
+            pattern_signature="cs:marubozu_D_hi_U_st0",
+            raw_state={},
+        ),
+        EngineOutput(
+            engine="crt",
+            direction="NO_SIGNAL",
+            confidence=None,
+            pattern_signature="crt:1-2-4_dw0",
+            raw_state={},
+        ),
+        EngineOutput(
+            engine="trig_euler",
+            direction="NO_SIGNAL",
+            confidence=None,
+            pattern_signature="trig:rel5_cx1_tr1_dir2_sg0_dw0",
+            raw_state={},
+        ),
+    ]
+
+    assert _eval_rule("r001", outputs) is False
+
+
+def test_seed_013_requires_candlestick_mid_position():
+    outputs = [
+        EngineOutput(
+            engine="trajectory",
+            direction="DOWN",
+            confidence=None,
+            pattern_signature="traj:ZIGZAG_lin_calm_dw0",
+            raw_state={},
+        ),
+        EngineOutput(
+            engine="candlestick",
+            direction="NO_SIGNAL",
+            confidence=None,
+            pattern_signature="cs:marubozu_bear_mid_U_st0",
+            raw_state={},
+        ),
+    ]
+
+    assert _eval_rule("r013", outputs) is True
+
+
+def test_seed_013_rejects_non_mid_candlestick_position():
+    outputs = [
+        EngineOutput(
+            engine="trajectory",
+            direction="DOWN",
+            confidence=None,
+            pattern_signature="traj:ZIGZAG_lin_calm_dw0",
+            raw_state={},
+        ),
+        EngineOutput(
+            engine="candlestick",
+            direction="NO_SIGNAL",
+            confidence=None,
+            pattern_signature="cs:marubozu_bear_hi_U_st0",
+            raw_state={},
+        ),
+    ]
+
+    assert _eval_rule("r013", outputs) is False
