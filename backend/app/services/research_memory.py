@@ -89,8 +89,7 @@ CREATE TABLE IF NOT EXISTS research_interaction_stats (
     up_count BIGINT NOT NULL DEFAULT 0,
     down_count BIGINT NOT NULL DEFAULT 0,
     first_seen TIMESTAMPTZ,
-    last_seen TIMESTAMPTZ,
-    UNIQUE(interaction_hash)
+    last_seen TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS research_predictions (
@@ -112,9 +111,6 @@ CREATE TABLE IF NOT EXISTS research_predictions (
     resolved_at TIMESTAMPTZ,
     UNIQUE(session_id, round_id, engine)
 );
-
-CREATE INDEX IF NOT EXISTS idx_research_interaction_stats_hash
-    ON research_interaction_stats(interaction_hash);
 
 CREATE INDEX IF NOT EXISTS idx_research_state_observations_session_round
     ON research_state_observations(session_id, round_id);
@@ -409,23 +405,27 @@ class ResearchMemory:
                 up_inc = 1 if outcome == "UP" else 0
                 dn_inc = 1 if outcome == "DOWN" else 0
 
-                rows = []
+                # Preserve the exact deterministic interaction set and
+                # per-interaction counters, but send the entire observation
+                # update through one set-based SQL statement instead of
+                # thousands of individual UPSERT executions.
+                payload = []
 
                 for combo in combos:
                     key = canonical_interaction_key(combo)
                     h = interaction_hash(key)
 
-                    rows.append(
-                        (
-                            h,
-                            key,
-                            up_inc,
-                            dn_inc,
-                        )
+                    payload.append(
+                        {
+                            "interaction_hash": h,
+                            "interaction_key": list(combo),
+                            "up_count": up_inc,
+                            "down_count": dn_inc,
+                        }
                     )
 
-                if rows:
-                    await cur.executemany(
+                if payload:
+                    await cur.execute(
                         """
                         INSERT INTO research_interaction_stats
                           (
@@ -437,14 +437,19 @@ class ResearchMemory:
                             first_seen,
                             last_seen
                           )
-                        VALUES (
-                            %s,
-                            %s::jsonb,
+                        SELECT
+                            x.interaction_hash,
+                            x.interaction_key,
                             1,
-                            %s,
-                            %s,
+                            x.up_count,
+                            x.down_count,
                             NOW(),
                             NOW()
+                        FROM jsonb_to_recordset(%s::jsonb) AS x(
+                            interaction_hash TEXT,
+                            interaction_key JSONB,
+                            up_count BIGINT,
+                            down_count BIGINT
                         )
                         ON CONFLICT (interaction_hash)
                         DO UPDATE SET
@@ -458,7 +463,7 @@ class ResearchMemory:
                             + EXCLUDED.down_count,
                           last_seen = NOW()
                         """,
-                        rows,
+                        (json.dumps(payload),),
                     )
 
                 await cur.execute(
